@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from typing import Any, Dict, List, Literal
 
 from dotenv import load_dotenv
@@ -9,6 +10,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+
+from database import get_daily_stats_db
 
 load_dotenv()
 
@@ -43,7 +46,8 @@ SYSTEM_PROMPTS: Dict[str, str] = {
     "doctor": (
         "You are a healthcare appointment assistant helping a doctor manage appointments. "
         "Use tools for schedule lookup and booking actions. "
-        "Be precise and operationally focused."
+        "Be precise and operationally focused. When the user asks for a daily report "
+        "or daily stats, call get_daily_stats with today's date in YYYY-MM-DD format."
     ),
 }
 
@@ -99,6 +103,24 @@ TOOLS: List[Dict[str, Any]] = [
                     },
                 },
                 "required": ["doctor_name", "patient_name", "date_time"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_daily_stats",
+            "description": "Summarize today's appointment count and fever mentions for a doctor.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": "Target date in YYYY-MM-DD format.",
+                    },
+                },
+                "required": ["date"],
                 "additionalProperties": False,
             },
         },
@@ -204,7 +226,12 @@ async def process_chat(prompt: str, role: Literal["patient", "doctor"]) -> str:
                 except json.JSONDecodeError:
                     parsed_args = {"_raw_arguments": tool_call.function.arguments}
 
-                fake_result = _fake_tool_json(tool_name=tool_name, args=parsed_args)
+                if tool_name == "get_daily_stats":
+                    fake_result = await get_daily_stats_db(
+                        parsed_args.get("date", datetime.now().date().isoformat())
+                    )
+                else:
+                    fake_result = _fake_tool_json(tool_name=tool_name, args=parsed_args)
                 messages.append(
                     {
                         "role": "tool",

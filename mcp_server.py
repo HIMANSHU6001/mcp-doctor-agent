@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from database import (
     book_appointment_db as book_appointment_db_helper,
+    get_daily_stats_db,
     get_doctor_availability as get_doctor_availability_helper,
 )
 
@@ -143,6 +144,26 @@ async def book_appointment_tool(doctor_name: str, patient_name: str, date_time: 
         doctor_name=doctor_name,
         patient_name=patient_name,
         date_time=date_time,
+    )
+
+
+@mcp.tool()
+async def get_daily_stats(date: str) -> str:
+    """Summarize the total appointments and fever mentions for a given day.
+
+    Args:
+        date (str): Target day in `YYYY-MM-DD` format.
+
+    Returns:
+        str: A short analytics summary.
+    """
+    stats = await get_daily_stats_db(date)
+    if not stats.get("ok"):
+        return str(stats.get("message", "Unable to fetch daily stats."))
+
+    return (
+        f"You have {stats['appointment_count']} appointments on {stats['date']}. "
+        f"{stats['fever_mentions']} patients reported fever."
     )
 
 

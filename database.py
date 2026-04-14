@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from datetime import date as date_type
 from datetime import datetime, time, timedelta
-from typing import List
+from typing import Any, Dict, List
 
 from dotenv import load_dotenv
 from sqlalchemy import DateTime, ForeignKey, Integer, String, select
@@ -49,6 +49,7 @@ class Appointment(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     doctor_id: Mapped[int] = mapped_column(ForeignKey("doctors.id"), nullable=False, index=True)
     patient_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    symptoms: Mapped[str | None] = mapped_column(String(500), nullable=True)
     appointment_date: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     status: Mapped[str] = mapped_column(
         String(50),
@@ -63,6 +64,45 @@ class Appointment(Base):
 def _build_daily_slots(target_date: date_type) -> List[datetime]:
     """Return hourly slots from 09:00 to 17:00 (inclusive)."""
     return [datetime.combine(target_date, time(hour=hour, minute=0)) for hour in range(9, 18)]
+
+
+async def get_daily_stats_db(date: str) -> Dict[str, Any]:
+    """Return appointment analytics for a single calendar day."""
+    try:
+        target_date = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        return {"ok": False, "message": "Invalid date format. Please use YYYY-MM-DD."}
+
+    day_start = datetime.combine(target_date, time.min)
+    day_end = day_start + timedelta(days=1)
+
+    async with AsyncSessionLocal() as session:
+        try:
+            appointment_result = await session.execute(
+                select(Appointment).where(
+                    Appointment.appointment_date >= day_start,
+                    Appointment.appointment_date < day_end,
+                    Appointment.status == "scheduled",
+                )
+            )
+            appointments = appointment_result.scalars().all()
+        except SQLAlchemyError as exc:
+            return {"ok": False, "message": f"Database error while fetching stats: {exc}"}
+
+    fever_mentions = 0
+    for appointment in appointments:
+        searchable_text = " ".join(
+            value for value in [appointment.symptoms, appointment.patient_name] if value
+        ).lower()
+        if "fever" in searchable_text:
+            fever_mentions += 1
+
+    return {
+        "ok": True,
+        "date": target_date.isoformat(),
+        "appointment_count": len(appointments),
+        "fever_mentions": fever_mentions,
+    }
 
 
 async def init_db() -> None:
@@ -128,7 +168,12 @@ async def get_doctor_availability(doctor_name: str, date: str) -> str:
             return f"Database error while fetching availability: {exc}"
 
 
-async def book_appointment_db(doctor_name: str, patient_name: str, date_time: datetime) -> str:
+async def book_appointment_db(
+    doctor_name: str,
+    patient_name: str,
+    date_time: datetime,
+    symptoms: str | None = None,
+) -> str:
     """Book an appointment if the exact slot is still available."""
     async with AsyncSessionLocal() as session:
         try:
@@ -154,6 +199,7 @@ async def book_appointment_db(doctor_name: str, patient_name: str, date_time: da
             appointment = Appointment(
                 doctor_id=doctor.id,
                 patient_name=patient_name,
+                symptoms=symptoms,
                 appointment_date=date_time,
                 status="scheduled",
             )
