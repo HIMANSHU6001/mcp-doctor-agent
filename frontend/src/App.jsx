@@ -1,5 +1,10 @@
 import { GoogleLogin } from '@react-oauth/google'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Badge } from './components/ui/badge'
+import { Button } from './components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card'
+import { Select } from './components/ui/select'
+import { Textarea } from './components/ui/textarea'
 
 function App() {
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
@@ -174,64 +179,56 @@ function App() {
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100">
+      <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
         <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-3xl items-center justify-center">
-          <section className="w-full overflow-hidden rounded-3xl border border-slate-800 bg-slate-900/80 shadow-2xl shadow-slate-950/50 backdrop-blur">
-            <div className="border-b border-slate-800 px-6 py-5">
-              <p className="text-xs uppercase tracking-[0.25em] text-cyan-300/80">
-                Doctor Assistant
-              </p>
-              <h1 className="mt-2 text-2xl font-semibold text-slate-100">
-                Sign in to continue
-              </h1>
-              <p className="mt-2 text-sm text-slate-400">
+          <Card className="w-full overflow-hidden rounded-3xl border-slate-200 shadow-xl">
+            <CardHeader className="border-b border-slate-200 bg-slate-100/60">
+              <Badge variant="secondary" className="w-fit">Doctor Assistant</Badge>
+              <CardTitle>Sign in to continue</CardTitle>
+              <CardDescription>
                 Choose your role, then authenticate with Google before chatting.
-              </p>
-            </div>
+              </CardDescription>
+            </CardHeader>
 
-            <div className="grid gap-6 px-6 py-6 md:grid-cols-2">
+            <CardContent className="grid gap-6 py-6 md:grid-cols-2">
               <div className="space-y-4">
-                <button
+                <Button
                   type="button"
+                  variant={role === 'patient' ? 'default' : 'outline'}
+                  size="lg"
                   onClick={() => setRole('patient')}
-                  className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
-                    role === 'patient'
-                      ? 'border-cyan-400 bg-cyan-400/10 text-cyan-100'
-                      : 'border-slate-700 bg-slate-950 text-slate-300 hover:border-slate-500'
-                  }`}
+                  className="h-auto w-full flex-col items-start gap-1 rounded-2xl px-4 py-4 text-left"
                 >
                   <div className="text-sm font-semibold">Login as Patient</div>
-                  <div className="mt-1 text-xs text-slate-400">
+                  <div className="text-xs text-slate-500">
                     Book appointments and ask about availability.
                   </div>
-                </button>
+                </Button>
 
-                <button
+                <Button
                   type="button"
+                  variant={role === 'doctor' ? 'default' : 'outline'}
+                  size="lg"
                   onClick={() => setRole('doctor')}
-                  className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
-                    role === 'doctor'
-                      ? 'border-cyan-400 bg-cyan-400/10 text-cyan-100'
-                      : 'border-slate-700 bg-slate-950 text-slate-300 hover:border-slate-500'
-                  }`}
+                  className="h-auto w-full flex-col items-start gap-1 rounded-2xl px-4 py-4 text-left"
                 >
                   <div className="text-sm font-semibold">Login as Doctor</div>
-                  <div className="mt-1 text-xs text-slate-400">
+                  <div className="text-xs text-slate-500">
                     Review daily stats and manage appointments.
                   </div>
-                </button>
+                </Button>
               </div>
 
-              <div className="rounded-2xl border border-slate-800 bg-slate-950 p-5">
+              <div className="rounded-2xl border border-slate-200 bg-white p-5">
                 <p className="text-xs uppercase tracking-[0.2em] text-slate-500">Selected Role</p>
-                <p className="mt-2 text-lg font-semibold text-slate-100">{selectedRoleLabel}</p>
-                <p className="mt-1 text-sm text-slate-400">
+                <p className="mt-2 text-lg font-semibold text-slate-900">{selectedRoleLabel}</p>
+                <p className="mt-1 text-sm text-slate-500">
                   Sign in with the Google account you want to use for this session.
                 </p>
 
                 <div className="mt-5">
                   {authLoading ? (
-                    <div className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-300">
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                       Signing in...
                     </div>
                   ) : googleClientId ? (
@@ -253,70 +250,69 @@ function App() {
                       size="large"
                     />
                   ) : (
-                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
                       Set VITE_GOOGLE_CLIENT_ID to enable Google sign-in.
                     </div>
                   )}
                 </div>
               </div>
-            </div>
-          </section>
+            </CardContent>
+          </Card>
         </div>
       </main>
     )
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-8 text-slate-100">
-      <div className="mx-auto flex h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/70 shadow-2xl shadow-slate-950/50 backdrop-blur">
-        <header className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+    <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-900">
+      <Card className="mx-auto flex h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border-slate-200 shadow-xl">
+        <header className="flex items-center justify-between border-b border-slate-200 bg-slate-100/70 px-5 py-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.25em] text-cyan-300/80">
-              Doctor Assistant
-            </p>
-            <h1 className="text-lg font-semibold text-slate-100">
+            <Badge variant="secondary">Doctor Assistant</Badge>
+            <h1 className="mt-2 text-lg font-semibold text-slate-900">
               Appointment Chat
             </h1>
             {user && (
-              <p className="mt-1 text-sm text-slate-400">
+              <p className="mt-1 text-sm text-slate-500">
                 Signed in as {user.name} ({user.email})
               </p>
             )}
           </div>
           <div className="flex flex-col items-end gap-3 sm:flex-row sm:items-center">
-            <span className="hidden text-xs text-slate-400 sm:inline">Role</span>
-            <select
+            <span className="hidden text-xs text-slate-500 sm:inline">Role</span>
+            <Select
               value={role}
               onChange={(event) => setRole(event.target.value)}
-              className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none ring-cyan-400 transition focus:ring-2"
+              className="w-auto min-w-44"
             >
               <option value="patient">Login as Patient</option>
               <option value="doctor">Login as Doctor</option>
-            </select>
+            </Select>
             {user ? (
-              <button
+              <Button
                 type="button"
                 onClick={handleSignOut}
-                className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 transition hover:border-slate-500 hover:bg-slate-800"
+                variant="outline"
               >
                 Sign out
-              </button>
+              </Button>
             ) : null}
           </div>
         </header>
 
         {role === 'doctor' && (
-          <div className="border-b border-slate-800 px-5 py-3">
-            <button
+          <div className="border-b border-slate-200 bg-slate-50 px-5 py-3">
+            <Button
               type="button"
               onClick={() =>
                 submitPrompt('Get my daily stats and summarize them', 'Generate Daily Report')
               }
               disabled={loading}
-              className="rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-200 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+              variant="secondary"
+              className="rounded-xl"
             >
               Generate Daily Report
-            </button>
+            </Button>
           </div>
         )}
 
@@ -330,8 +326,8 @@ function App() {
                 <div
                   className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed sm:max-w-[75%] ${
                     message.sender === 'user'
-                      ? 'rounded-br-sm bg-cyan-500 text-slate-950'
-                      : 'rounded-bl-sm border border-slate-700 bg-slate-800 text-slate-100'
+                      ? 'rounded-br-sm bg-slate-900 text-white'
+                      : 'rounded-bl-sm border border-slate-200 bg-white text-slate-800'
                   }`}
                 >
                   <p className="mb-1 text-[10px] uppercase tracking-[0.18em] opacity-70">
@@ -344,7 +340,7 @@ function App() {
 
             {loading && (
               <div className="flex justify-start">
-                <div className="rounded-2xl rounded-bl-sm border border-slate-700 bg-slate-800 px-4 py-3 text-sm text-slate-200">
+                <div className="rounded-2xl rounded-bl-sm border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
                   <p className="mb-1 text-[10px] uppercase tracking-[0.18em] opacity-70">
                     Assistant
                   </p>
@@ -358,26 +354,26 @@ function App() {
 
         <form
           onSubmit={sendMessage}
-          className="border-t border-slate-800 bg-slate-900 px-4 py-4 sm:px-6"
+          className="border-t border-slate-200 bg-slate-100/70 px-4 py-4 sm:px-6"
         >
           <div className="flex items-end gap-3">
-            <textarea
+            <Textarea
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder="Type your message..."
               rows={2}
-              className="max-h-36 min-h-[52px] flex-1 resize-y rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none ring-cyan-400 placeholder:text-slate-500 focus:ring-2"
+              className="max-h-36 min-h-[52px] flex-1 resize-y rounded-xl border-slate-300 bg-white"
             />
-            <button
+            <Button
               type="submit"
               disabled={loading || !prompt.trim()}
-              className="rounded-xl bg-cyan-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              className="rounded-xl"
             >
               {loading ? 'Sending...' : 'Send'}
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
+      </Card>
     </main>
   )
 }
