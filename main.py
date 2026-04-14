@@ -11,7 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from database import get_daily_stats_db
+from database import (
+    book_appointment_db,
+    get_daily_stats_db,
+    get_doctor_availability,
+    init_db,
+)
 
 load_dotenv()
 
@@ -34,6 +39,12 @@ class ChatResponse(BaseModel):
     response: str
 
 
+@app.on_event("startup")
+async def on_startup() -> None:
+    """Ensure tables exist before handling requests."""
+    await init_db()
+
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client: AsyncOpenAI | None = None
 
@@ -51,7 +62,7 @@ SYSTEM_PROMPTS: Dict[str, str] = {
     ),
 }
 
-# Hardcoded tool schemas mirror tools exposed in mcp_server.py.
+# Tool schemas mirror tools exposed in mcp_server.py.
 TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
@@ -128,32 +139,52 @@ TOOLS: List[Dict[str, Any]] = [
 ]
 
 
-def _fake_tool_json(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """Return deterministic fake tool data for early integration testing."""
+async def _execute_tool(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a known tool with real backend logic and normalized JSON output."""
     if tool_name == "get_doctor_availability_tool":
+        doctor_name = str(args.get("doctor_name", ""))
+        date = str(args.get("date", ""))
+        result = await get_doctor_availability(doctor_name=doctor_name, date=date)
         return {
-            "status": "simulated",
+            "ok": True,
             "tool": tool_name,
-            "doctor_name": args.get("doctor_name", ""),
-            "date": args.get("date", ""),
-            "available_slots": ["09:00", "10:00", "11:00", "14:00"],
-            "note": "Fake response. Wire to MCP server for live database data.",
+            "result": result,
         }
 
     if tool_name == "book_appointment_tool":
+        doctor_name = str(args.get("doctor_name", ""))
+        patient_name = str(args.get("patient_name", ""))
+        date_time_str = str(args.get("date_time", ""))
+
+        try:
+            date_time = datetime.fromisoformat(date_time_str.replace("Z", "+00:00"))
+        except ValueError:
+            return {
+                "ok": False,
+                "tool": tool_name,
+                "error": "Invalid date_time format. Use ISO-8601 date-time.",
+            }
+
+        result = await book_appointment_db(
+            doctor_name=doctor_name,
+            patient_name=patient_name,
+            date_time=date_time,
+        )
         return {
-            "status": "simulated_success",
+            "ok": True,
             "tool": tool_name,
-            "doctor_name": args.get("doctor_name", ""),
-            "patient_name": args.get("patient_name", ""),
-            "date_time": args.get("date_time", ""),
-            "note": "Fake response. No real booking has been persisted yet.",
+            "result": result,
         }
 
+    if tool_name == "get_daily_stats":
+        return await get_daily_stats_db(
+            str(args.get("date", datetime.now().date().isoformat()))
+        )
+
     return {
-        "status": "unsupported_tool",
+        "ok": False,
         "tool": tool_name,
-        "note": "Tool is not recognized by the fake dispatcher.",
+        "error": "Tool is not recognized by the backend dispatcher.",
     }
 
 
@@ -167,7 +198,10 @@ def _get_openai_client() -> AsyncOpenAI:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is missing. Set it in the .env file.")
 
-    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    client = AsyncOpenAI(
+        api_key=OPENAI_API_KEY,
+        base_url="https://models.inference.ai.azure.com"
+    )
     return client
 
 
@@ -175,8 +209,12 @@ async def process_chat(prompt: str, role: Literal["patient", "doctor"]) -> str:
     """Run chat completion loop until the model returns a final text answer."""
     openai_client = _get_openai_client()
 
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    
+    dynamic_system_prompt = f"{SYSTEM_PROMPTS[role]}\n\nIMPORTANT: Today's date is {current_date}. Use this to resolve relative dates like 'tomorrow' into YYYY-MM-DD format."
+
     messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPTS[role]},
+        {"role": "system", "content": dynamic_system_prompt},
         {"role": "user", "content": prompt},
     ]
 
@@ -226,18 +264,13 @@ async def process_chat(prompt: str, role: Literal["patient", "doctor"]) -> str:
                 except json.JSONDecodeError:
                     parsed_args = {"_raw_arguments": tool_call.function.arguments}
 
-                if tool_name == "get_daily_stats":
-                    fake_result = await get_daily_stats_db(
-                        parsed_args.get("date", datetime.now().date().isoformat())
-                    )
-                else:
-                    fake_result = _fake_tool_json(tool_name=tool_name, args=parsed_args)
+                tool_result = await _execute_tool(tool_name=tool_name, args=parsed_args)
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "name": tool_name,
-                        "content": json.dumps(fake_result),
+                        "content": json.dumps(tool_result),
                     }
                 )
 

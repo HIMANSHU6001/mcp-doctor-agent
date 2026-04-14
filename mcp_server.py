@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import anyio
 from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
@@ -8,9 +9,10 @@ from database import (
     book_appointment_db as book_appointment_db_helper,
     get_daily_stats_db,
     get_doctor_availability as get_doctor_availability_helper,
+    init_db,
 )
 
-mcp = FastMCP("DoctorAssistant")
+mcp = FastMCP("DoctorAssistant", host="0.0.0.0", port=8001)
 
 
 @mcp.tool()
@@ -168,4 +170,5 @@ async def get_daily_stats(date: str) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    anyio.run(init_db)
+    mcp.run(transport='sse')

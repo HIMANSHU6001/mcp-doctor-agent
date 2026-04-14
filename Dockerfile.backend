@@ -1,0 +1,22 @@
+# Use the official uv image based on Debian slim
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
+
+WORKDIR /app
+
+# Enable bytecode compilation for faster startup
+ENV UV_COMPILE_BYTECODE=1
+
+# Copy the lockfile and pyproject.toml first to leverage Docker layer caching
+COPY uv.lock pyproject.toml ./
+
+# Install dependencies into the local .venv without installing the project itself yet
+RUN uv sync --frozen --no-install-project --no-dev
+
+# Copy the rest of the application code
+COPY database.py main.py mcp_server.py ./
+
+# Place the virtual environment in the system path so Python finds the packages
+ENV PATH="/app/.venv/bin:$PATH"
+
+# We don't set a CMD here because docker-compose will override it 
+# depending on if it's running the API or the MCP server.
