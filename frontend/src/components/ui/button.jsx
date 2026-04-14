@@ -9,6 +9,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default: 'bg-slate-900 text-white hover:bg-slate-800',
+        accent: 'bg-sky-600 text-white hover:bg-sky-700',
         secondary: 'bg-slate-100 text-slate-900 hover:bg-slate-200',
         outline: 'border border-slate-300 bg-white text-slate-900 hover:bg-slate-50',
         ghost: 'text-slate-700 hover:bg-slate-100',
@@ -31,4 +32,4 @@ function Button({ className, variant, size, asChild = false, ...props }) {
   return <Comp className={cn(buttonVariants({ variant, size, className }))} {...props} />
 }
 
-export { Button, buttonVariants }
+export { Button }
