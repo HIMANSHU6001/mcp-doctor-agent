@@ -2,6 +2,8 @@
 
 A full-stack doctor appointment assistant demonstrating strict MCP client-server tool orchestration with dynamic tool discovery.
 
+For architecture decisions and constraints aligned to this repository, see `TRD.md`.
+
 ## Stack
 
 - Frontend: React + Vite
@@ -37,6 +39,7 @@ A full-stack doctor appointment assistant demonstrating strict MCP client-server
 - List available doctors via `list_doctors_tool`.
 - Check availability via `get_doctor_availability_tool`.
 - Book slot via `book_appointment_tool`.
+- Booking validation is enforced server-side (hourly slots only, 09:00-17:00 inclusive, timezone-naive input expected).
 - On successful booking:
   - appointment is written to PostgreSQL,
   - patient confirmation email is sent,
@@ -62,7 +65,7 @@ Copy `.env.example` to `.env` and configure at minimum:
 - `RESEND_FROM_EMAIL` (required for reliable delivery in production)
 - `SLACK_WEBHOOK_URL`
 
-Calendar integration is intentionally deferred in this submission.
+Calendar integration is intentionally deferred in this submission due to Google OAuth sensitive scope policy and verification overhead.
 
 Recommended local `DATABASE_URL` in Docker:
 
@@ -81,7 +84,7 @@ docker compose up --build
 
 Services:
 
-- Frontend: `http://localhost`
+- Frontend: `http://localhost:3000`
 - API: `http://localhost:8000`
 - MCP server (SSE): `http://localhost:8001/sse`
 - Postgres: `localhost:5432`
@@ -110,3 +113,8 @@ Available MCP prompt/resource entries:
 - `POST /api/auth/google`
 - `POST /api/chat`
 - `POST /api/doctor/report-notify`
+
+## Known Limitations
+
+- Session memory is in-process and resets when the API service restarts.
+- Frontend chat calls support `VITE_API_BASE_URL`, but Google auth call path currently targets `http://localhost:8000` in the auth screen source.
