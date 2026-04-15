@@ -23,6 +23,7 @@ export function AppProvider({ children }) {
   const [user, setUserState] = useState(initialUser)
   const [messages, setMessages] = useState([])
   const [isLoading, setIsLoading] = useState(false)
+  const [reportStatus, setReportStatus] = useState(null)
   const [sessionId, setSessionId] = useState(initialSessionId)
 
   const setUser = (profile) => {
@@ -88,9 +89,76 @@ export function AppProvider({ children }) {
     }
   }
 
+  const clearReportStatus = () => {
+    setReportStatus(null)
+  }
+
+  const sendDoctorReportNotification = async (date = null) => {
+    if (isLoading) {
+      return { ok: false, message: 'A request is already in progress.' }
+    }
+
+    if (!user?.email) {
+      const nextStatus = {
+        state: 'error',
+        message: 'Doctor email is required to send Slack report notifications.',
+      }
+      setReportStatus(nextStatus)
+      return { ok: false, message: nextStatus.message }
+    }
+
+    setIsLoading(true)
+    setReportStatus({ state: 'loading', message: 'Sending doctor report notification...' })
+
+    try {
+      const response = await fetch(`${API_BASE}/api/doctor/report-notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          doctor_name: user?.name ?? 'Doctor',
+          doctor_email: user.email,
+          date,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Backend returned an error')
+      }
+
+      const data = await response.json()
+      const reportText = typeof data?.report === 'string' ? data.report.trim() : ''
+
+      if (reportText) {
+        setMessages((prev) => [...prev, { role: 'assistant', content: reportText }])
+      }
+
+      const sent = Boolean(data?.sent)
+      const statusMessage = sent
+        ? 'Doctor report sent to Slack.'
+        : data?.notification?.message || 'Report generated, but Slack delivery failed.'
+
+      setReportStatus({
+        state: sent ? 'success' : 'error',
+        message: statusMessage,
+      })
+
+      return { ok: sent, data }
+    } catch {
+      const nextStatus = {
+        state: 'error',
+        message: 'Unable to send doctor report notification.',
+      }
+      setReportStatus(nextStatus)
+      return { ok: false, message: nextStatus.message }
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   const logout = () => {
     setUser(null)
     setMessages([])
+    setReportStatus(null)
     const freshSessionId = crypto.randomUUID()
     setSession(freshSessionId)
   }
@@ -102,7 +170,10 @@ export function AppProvider({ children }) {
     setUser,
     messages,
     isLoading,
+    reportStatus,
+    clearReportStatus,
     sendMessage,
+    sendDoctorReportNotification,
     logout,
   }
 

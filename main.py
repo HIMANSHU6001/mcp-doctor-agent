@@ -14,15 +14,38 @@ from google.oauth2 import id_token
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from database import (
-    book_appointment_db,
-    get_daily_stats_db,
-    get_doctor_availability,
-    init_db,
-)
-from email_service import send_booking_confirmation
+from database import init_db
+from mcp_client import MCPToolClient
 
 load_dotenv()
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001/sse")
+
+openai_client: AsyncOpenAI | None = None
+google_request = Request()
+mcp_tool_client = MCPToolClient(server_url=MCP_SERVER_URL)
+
+SESSION_MEMORY: Dict[str, List[Dict[str, str]]] = {}
+SESSION_ROLES: Dict[str, Literal["patient", "doctor"]] = {}
+MAX_SESSION_MESSAGES = 12
+
+SYSTEM_PROMPTS: Dict[str, str] = {
+    "patient": (
+        "You are a healthcare appointment assistant helping a patient. "
+        "Use tools when scheduling or availability information is needed. "
+        "When booking, call book_appointment_tool with patient_email for confirmation and calendar sync. "
+        "Be clear, practical, and concise."
+    ),
+    "doctor": (
+        "You are a healthcare appointment assistant helping a doctor manage appointments. "
+        "Use tools for schedule lookup and reporting actions. "
+        "When asked for daily stats, call get_daily_stats. "
+        "When asked to send or notify a report, call send_doctor_report_notification. "
+        "Be precise and operationally focused."
+    ),
+}
 
 app = FastAPI(title="Doctor Assistant Backend")
 app.add_middleware(
@@ -45,6 +68,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     session_id: str
+    tool_outcomes: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class GoogleAuthRequest(BaseModel):
@@ -57,204 +81,55 @@ class GoogleAuthResponse(BaseModel):
     picture: str | None = None
 
 
+class DoctorReportRequest(BaseModel):
+    doctor_name: str = Field(default="Doctor")
+    doctor_email: str = Field(..., min_length=3)
+    date: str | None = None
+
+
+class DoctorReportResponse(BaseModel):
+    report: str
+    date: str
+    sent: bool
+    notification: Dict[str, Any] = Field(default_factory=dict)
+
+
 def _build_system_prompt(
     role: Literal["patient", "doctor"],
     user_name: str | None,
     user_email: str | None,
 ) -> str:
-    """Build the role-specific system prompt with user context."""
     current_date = datetime.now().strftime("%Y-%m-%d")
     resolved_name = user_name or "the user"
     resolved_email = user_email or "not provided"
+
     return (
-        f"{SYSTEM_PROMPTS[role]}\n\n"
-        f"You are talking to {resolved_name}. Their email is {resolved_email}.\n"
-        f"IMPORTANT: Today's date is {current_date}. Use this to resolve relative dates like 'tomorrow' into YYYY-MM-DD format."
+        f"{SYSTEM_PROMPTS[role]}\\n\\n"
+        f"You are talking to {resolved_name}. Their email is {resolved_email}.\\n"
+        f"Today's date is {current_date}. Resolve relative dates like 'tomorrow' into YYYY-MM-DD."
     )
+
+
+def _parse_json_if_possible(raw_text: str) -> Any:
+    try:
+        return json.loads(raw_text)
+    except Exception:
+        return raw_text
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    """Ensure tables exist before handling requests."""
     await init_db()
+    await mcp_tool_client.connect()
 
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-client: AsyncOpenAI | None = None
-google_request = Request()
-SESSION_MEMORY: Dict[str, List[Dict[str, str]]] = {}
-SESSION_ROLES: Dict[str, Literal["patient", "doctor"]] = {}
-MAX_SESSION_MESSAGES = 12
-
-SYSTEM_PROMPTS: Dict[str, str] = {
-    "patient": (
-        "You are a healthcare appointment assistant helping a patient. "
-        "Use tools when scheduling or availability information is needed. "
-        "Be clear, practical, and concise."
-    ),
-    "doctor": (
-        "You are a healthcare appointment assistant helping a doctor manage appointments. "
-        "Use tools for schedule lookup and booking actions. "
-        "Be precise and operationally focused. When the user asks for a daily report "
-        "or daily stats, call get_daily_stats with today's date in YYYY-MM-DD format."
-    ),
-}
-
-# Tool schemas mirror tools exposed in mcp_server.py.
-TOOLS: List[Dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_doctor_availability_tool",
-            "description": (
-                "Get available appointment times for a doctor on a specific date. "
-                "Date must be in YYYY-MM-DD format."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "doctor_name": {
-                        "type": "string",
-                        "description": "Canonical doctor name, for example 'Dr. Ahuja'.",
-                    },
-                    "date": {
-                        "type": "string",
-                        "description": "Target date in YYYY-MM-DD format.",
-                    },
-                },
-                "required": ["doctor_name", "date"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "book_appointment_tool",
-            "description": (
-                "Book an appointment for a doctor and patient at an exact datetime slot."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "doctor_name": {
-                        "type": "string",
-                        "description": "Canonical doctor name, for example 'Dr. Ahuja'.",
-                    },
-                    "patient_name": {
-                        "type": "string",
-                        "description": "Full patient name for the booking.",
-                    },
-                    "patient_email": {
-                        "type": "string",
-                        "format": "email",
-                        "description": "Patient email address for the booking confirmation.",
-                    },
-                    "date_time": {
-                        "type": "string",
-                        "format": "date-time",
-                        "description": "Appointment timestamp in ISO-8601 format.",
-                    },
-                },
-                "required": ["doctor_name", "patient_name", "patient_email", "date_time"],
-                "additionalProperties": False,
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_daily_stats",
-            "description": "Summarize today's appointment count and fever mentions for a doctor.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "date": {
-                        "type": "string",
-                        "description": "Target date in YYYY-MM-DD format.",
-                    },
-                },
-                "required": ["date"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
-
-
-async def _execute_tool(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a known tool with real backend logic and normalized JSON output."""
-    if tool_name == "get_doctor_availability_tool":
-        doctor_name = str(args.get("doctor_name", ""))
-        date = str(args.get("date", ""))
-        result = await get_doctor_availability(doctor_name=doctor_name, date=date)
-        return {
-            "ok": True,
-            "tool": tool_name,
-            "result": result,
-        }
-
-    if tool_name == "book_appointment_tool":
-        doctor_name = str(args.get("doctor_name", ""))
-        patient_name = str(args.get("patient_name", ""))
-        patient_email = str(args.get("patient_email", "")).strip()
-        date_time_str = str(args.get("date_time", ""))
-
-        if not patient_email:
-            return {
-                "ok": False,
-                "tool": tool_name,
-                "error": "patient_email is required for booking confirmations.",
-            }
-
-        try:
-            date_time = datetime.fromisoformat(date_time_str.replace("Z", "+00:00"))
-        except ValueError:
-            return {
-                "ok": False,
-                "tool": tool_name,
-                "error": "Invalid date_time format. Use ISO-8601 date-time.",
-            }
-
-        result = await book_appointment_db(
-            doctor_name=doctor_name,
-            patient_name=patient_name,
-            date_time=date_time,
-        )
-
-        email_delivery = None
-        if result.startswith("Appointment booked for"):
-            email_delivery = await send_booking_confirmation(
-                patient_email=patient_email,
-                patient_name=patient_name,
-                doctor_name=doctor_name,
-                date_time=date_time.isoformat(),
-            )
-
-        return {
-            "ok": True,
-            "tool": tool_name,
-            "result": result,
-            "email_sent": email_delivery is not None,
-            "email_response": str(email_delivery) if email_delivery is not None else None,
-        }
-
-    if tool_name == "get_daily_stats":
-        return await get_daily_stats_db(
-            str(args.get("date", datetime.now().date().isoformat()))
-        )
-
-    return {
-        "ok": False,
-        "tool": tool_name,
-        "error": "Tool is not recognized by the backend dispatcher.",
-    }
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    await mcp_tool_client.close()
 
 
 @app.post("/api/auth/google", response_model=GoogleAuthResponse)
 async def google_auth_endpoint(payload: GoogleAuthRequest) -> GoogleAuthResponse:
-    """Verify a Google OAuth token and return the user profile."""
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=500, detail="GOOGLE_CLIENT_ID is missing. Set it in the .env file.")
 
@@ -274,20 +149,27 @@ async def google_auth_endpoint(payload: GoogleAuthRequest) -> GoogleAuthResponse
 
 
 def _get_openai_client() -> AsyncOpenAI:
-    """Create and cache OpenAI client only when an API key is available."""
-    global client
+    global openai_client
 
-    if client is not None:
-        return client
+    if openai_client is not None:
+        return openai_client
 
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is missing. Set it in the .env file.")
 
-    client = AsyncOpenAI(
+    openai_client = AsyncOpenAI(
         api_key=OPENAI_API_KEY,
-        base_url="https://models.inference.ai.azure.com"
+        base_url="https://models.inference.ai.azure.com",
     )
-    return client
+    return openai_client
+
+
+async def _get_discovered_openai_tools() -> List[Dict[str, Any]]:
+    await mcp_tool_client.refresh_tools()
+    tools = mcp_tool_client.get_openai_tools()
+    if not tools:
+        raise RuntimeError("MCP server returned no tools during discovery.")
+    return tools
 
 
 async def process_chat(
@@ -296,9 +178,9 @@ async def process_chat(
     session_id: str,
     user_name: str | None = None,
     user_email: str | None = None,
-) -> str:
-    """Run chat completion loop until the model returns a final text answer."""
-    openai_client = _get_openai_client()
+) -> tuple[str, List[Dict[str, Any]]]:
+    client = _get_openai_client()
+    discovered_tools = await _get_discovered_openai_tools()
 
     if session_id in SESSION_ROLES and SESSION_ROLES[session_id] != role:
         SESSION_MEMORY[session_id] = []
@@ -312,18 +194,22 @@ async def process_chat(
     messages.extend(history)
     messages.append({"role": "user", "content": prompt})
 
+    tool_outcomes: List[Dict[str, Any]] = []
     max_turns = 8
     turn = 0
 
     while True:
         turn += 1
         if turn > max_turns:
-            return "I could not finish the request after several tool calls. Please try again."
+            return (
+                "I could not finish the request after several tool calls. Please try again.",
+                tool_outcomes,
+            )
 
-        completion = await openai_client.chat.completions.create(
+        completion = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
-            tools=TOOLS,
+            tools=discovered_tools,
             tool_choice="auto",
         )
 
@@ -351,20 +237,43 @@ async def process_chat(
 
             for tool_call in tool_calls:
                 tool_name = tool_call.function.name
-                print(f"Tool called: {tool_name}")
 
                 try:
                     parsed_args = json.loads(tool_call.function.arguments or "{}")
+                    if not isinstance(parsed_args, dict):
+                        parsed_args = {"value": parsed_args}
                 except json.JSONDecodeError:
                     parsed_args = {"_raw_arguments": tool_call.function.arguments}
 
-                tool_result = await _execute_tool(tool_name=tool_name, args=parsed_args)
+                try:
+                    tool_result_text = await mcp_tool_client.call_tool(
+                        name=tool_name,
+                        arguments=parsed_args,
+                    )
+                except Exception as exc:
+                    tool_result_text = json.dumps(
+                        {
+                            "ok": False,
+                            "tool": tool_name,
+                            "message": f"MCP tool call failed: {exc}",
+                        }
+                    )
+
+                parsed_result = _parse_json_if_possible(tool_result_text)
+                tool_outcomes.append(
+                    {
+                        "tool": tool_name,
+                        "arguments": parsed_args,
+                        "result": parsed_result,
+                    }
+                )
+
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "name": tool_name,
-                        "content": json.dumps(tool_result),
+                        "content": tool_result_text,
                     }
                 )
 
@@ -377,20 +286,61 @@ async def process_chat(
             {"role": "assistant", "content": final_text},
         ]
         SESSION_MEMORY[session_id] = updated_history[-MAX_SESSION_MESSAGES:]
-        return final_text
+        return final_text, tool_outcomes
 
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
     try:
         session_id = payload.session_id or str(uuid.uuid4())
-        response_text = await process_chat(
+        response_text, tool_outcomes = await process_chat(
             prompt=payload.prompt,
             role=payload.role,
             session_id=session_id,
             user_name=payload.user_name,
             user_email=payload.user_email,
         )
-        return ChatResponse(response=response_text, session_id=session_id)
+        return ChatResponse(response=response_text, session_id=session_id, tool_outcomes=tool_outcomes)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to process chat: {exc}") from exc
+
+
+@app.post("/api/doctor/report-notify", response_model=DoctorReportResponse)
+async def doctor_report_notify_endpoint(payload: DoctorReportRequest) -> DoctorReportResponse:
+    target_date = payload.date or datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        result_text = await mcp_tool_client.call_tool(
+            name="send_doctor_report_notification",
+            arguments={
+                "doctor_name": payload.doctor_name,
+                "doctor_email": payload.doctor_email,
+                "date": target_date,
+            },
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"MCP report notification failed: {exc}") from exc
+
+    parsed = _parse_json_if_possible(result_text)
+
+    if isinstance(parsed, dict):
+        notification = parsed.get("notification")
+        if not isinstance(notification, dict):
+            notification = {"raw": notification}
+
+        report = str(parsed.get("report") or parsed.get("summary") or parsed.get("message") or result_text)
+        sent = bool(notification.get("ok", parsed.get("ok", False)))
+
+        return DoctorReportResponse(
+            report=report,
+            date=target_date,
+            sent=sent,
+            notification=notification,
+        )
+
+    return DoctorReportResponse(
+        report=str(parsed),
+        date=target_date,
+        sent=False,
+        notification={"raw": str(parsed)},
+    )

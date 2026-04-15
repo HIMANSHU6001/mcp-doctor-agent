@@ -9,7 +9,17 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 
 const ChatScreen = () => {
-  const { user, role, messages, isLoading, sendMessage, logout } = useApp()
+  const {
+    user,
+    role,
+    messages,
+    isLoading,
+    reportStatus,
+    clearReportStatus,
+    sendMessage,
+    sendDoctorReportNotification,
+    logout,
+  } = useApp()
   const [input, setInput] = useState('')
   const scrollRef = useRef(null)
 
@@ -22,12 +32,13 @@ const ChatScreen = () => {
     if (!input.trim() || isLoading) {
       return
     }
+    clearReportStatus()
     sendMessage(input.trim())
     setInput('')
   }
 
-  const handleDailyStats = () => {
-    sendMessage('Generate my daily stats report for today')
+  const handleDailyStats = async () => {
+    await sendDoctorReportNotification()
   }
 
   return (
@@ -92,10 +103,31 @@ const ChatScreen = () => {
 
       {role === 'doctor' && (
         <div className="border-t border-slate-200 bg-white/60 px-4 py-2 sm:px-6">
-          <Button variant="outline" size="sm" onClick={handleDailyStats} className="gap-2">
-            <Activity className="h-4 w-4" />
-            Generate Daily Stats
-          </Button>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDailyStats}
+              className="gap-2"
+              disabled={isLoading}
+            >
+              <Activity className="h-4 w-4" />
+              Send Daily Report
+            </Button>
+            {reportStatus && (
+              <p
+                className={`text-xs ${
+                  reportStatus.state === 'success'
+                    ? 'text-emerald-700'
+                    : reportStatus.state === 'loading'
+                      ? 'text-slate-500'
+                      : 'text-red-600'
+                }`}
+              >
+                {reportStatus.message}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
