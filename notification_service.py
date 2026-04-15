@@ -14,6 +14,7 @@ async def send_doctor_report_to_slack(
     doctor_email: str,
     date: str,
     report_text: str,
+    stats: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Send a doctor report notification using an incoming Slack webhook."""
     webhook_url = os.getenv("SLACK_WEBHOOK_URL", "").strip()
@@ -24,43 +25,71 @@ async def send_doctor_report_to_slack(
             "message": "SLACK_WEBHOOK_URL is missing.",
         }
 
+    appointment_count = int((stats or {}).get("appointment_count", 0))
+    fever_mentions = int((stats or {}).get("fever_mentions", 0))
+
     payload = {
-        "text": f"Doctor report for {doctor_name} ({date})",
+        "text": (
+            f"Doctor report | {doctor_name} | {date} | "
+            f"appointments={appointment_count}, fever_mentions={fever_mentions}"
+        ),
         "blocks": [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"Doctor Report: {doctor_name}",
+                    "text": "Daily Doctor Report",
                 },
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Doctor:* {doctor_name}  |  *Date:* {date}",
+                },
+            },
+            {
+                "type": "divider",
             },
             {
                 "type": "section",
                 "fields": [
                     {
                         "type": "mrkdwn",
-                        "text": f"*Doctor*\\n{doctor_name}",
+                        "text": f"*Appointments*\n{appointment_count}",
                     },
                     {
                         "type": "mrkdwn",
-                        "text": f"*Email*\\n{doctor_email}",
+                        "text": f"*Fever Mentions*\n{fever_mentions}",
                     },
                     {
                         "type": "mrkdwn",
-                        "text": f"*Date*\\n{date}",
+                        "text": "*Notification Channel*\nSlack Webhook",
                     },
                     {
                         "type": "mrkdwn",
-                        "text": f"*Generated At*\\n{datetime.utcnow().isoformat()}Z",
+                        "text": f"*Generated At (UTC)*\n{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}Z",
                     },
                 ],
+            },
+            {
+                "type": "divider",
             },
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": report_text,
+                    "text": f"*Summary*\n{report_text}",
                 },
+            },
+            {
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"Doctor email: {doctor_email}",
+                    }
+                ],
             },
         ],
     }

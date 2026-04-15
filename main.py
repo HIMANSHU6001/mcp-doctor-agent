@@ -14,7 +14,7 @@ from google.oauth2 import id_token
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from database import init_db
+from database import get_or_create_doctor_by_email, init_db
 from mcp_client import MCPToolClient
 
 load_dotenv()
@@ -35,7 +35,10 @@ SYSTEM_PROMPTS: Dict[str, str] = {
     "patient": (
         "You are a healthcare appointment assistant helping a patient. "
         "Use tools when scheduling or availability information is needed. "
-        "When booking, call book_appointment_tool with patient_email for confirmation and calendar sync. "
+        "When booking, call book_appointment_tool with patient_email for confirmation. "
+        "When asked which doctors are available, call list_doctors_tool. "
+        "For booking outcomes, clearly report both booking status and email delivery status. "
+        "Do not mention unsupported integrations. "
         "Be clear, practical, and concise."
     ),
     "doctor": (
@@ -73,6 +76,7 @@ class ChatResponse(BaseModel):
 
 class GoogleAuthRequest(BaseModel):
     token: str = Field(..., min_length=1)
+    role: Literal["patient", "doctor"] = "patient"
 
 
 class GoogleAuthResponse(BaseModel):
@@ -114,6 +118,15 @@ def _parse_json_if_possible(raw_text: str) -> Any:
     try:
         return json.loads(raw_text)
     except Exception:
+        # Try extracting just the first JSON object if multi-line
+        lines = raw_text.strip().split('\n')
+        for line in lines:
+            try:
+                parsed = json.loads(line)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
         return raw_text
 
 
@@ -144,6 +157,14 @@ async def google_auth_endpoint(payload: GoogleAuthRequest) -> GoogleAuthResponse
 
     if not email or not name:
         raise HTTPException(status_code=401, detail="Google token did not include profile information.")
+
+    if payload.role == "doctor":
+        sync_result = await get_or_create_doctor_by_email(doctor_email=email, doctor_name=name)
+        if not sync_result.get("ok"):
+            raise HTTPException(
+                status_code=500,
+                detail=sync_result.get("message", "Failed to sync doctor profile."),
+            )
 
     return GoogleAuthResponse(email=email, name=name, picture=picture)
 
@@ -324,12 +345,13 @@ async def doctor_report_notify_endpoint(payload: DoctorReportRequest) -> DoctorR
     parsed = _parse_json_if_possible(result_text)
 
     if isinstance(parsed, dict):
-        notification = parsed.get("notification")
+        notification = parsed.get("notification", {})
         if not isinstance(notification, dict):
             notification = {"raw": notification}
 
         report = str(parsed.get("report") or parsed.get("summary") or parsed.get("message") or result_text)
-        sent = bool(notification.get("ok", parsed.get("ok", False)))
+        # Check notification.ok first (Slack response), then top-level ok
+        sent = bool(notification.get("ok")) or bool(parsed.get("ok", False))
 
         return DoctorReportResponse(
             report=report,

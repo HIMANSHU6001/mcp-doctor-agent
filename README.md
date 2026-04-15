@@ -10,8 +10,7 @@ A full-stack doctor appointment assistant demonstrating strict MCP client-server
 - Database: PostgreSQL + SQLAlchemy async
 - LLM: OpenAI tool-calling
 - External services:
-  - Google Calendar (service account)
-  - Resend email (patient confirmations)
+  - Resend email (patient confirmations + doctor booking notifications)
   - Slack webhook (doctor report notifications)
 
 ## Architecture
@@ -20,7 +19,7 @@ A full-stack doctor appointment assistant demonstrating strict MCP client-server
 2. FastAPI discovers tools at runtime from MCP server using `tools/list`.
 3. LLM decides tool calls (`tool_choice=auto`).
 4. FastAPI executes all tools through MCP `tools/call`.
-5. MCP tools perform DB queries/mutations and integrations (Calendar, email, Slack).
+5. MCP tools perform DB queries/mutations and integrations (email, Slack).
 6. FastAPI returns final assistant response to frontend.
 
 ## MCP Compliance Notes
@@ -34,12 +33,13 @@ A full-stack doctor appointment assistant demonstrating strict MCP client-server
 
 ### Scenario 1: Patient appointment scheduling
 
+- List available doctors via `list_doctors_tool`.
 - Check availability via `get_doctor_availability_tool`.
 - Book slot via `book_appointment_tool`.
 - On successful booking:
   - appointment is written to PostgreSQL,
-  - Google Calendar event is created,
-  - patient confirmation email is sent.
+  - patient confirmation email is sent,
+  - doctor notification email is sent with patient and appointment details.
 
 ### Scenario 2: Doctor summary and notification
 
@@ -58,9 +58,17 @@ Copy `.env.example` to `.env` and configure at minimum:
 - `MCP_SERVER_URL`
 - `GOOGLE_CLIENT_ID`
 - `RESEND_API_KEY`
-- `GOOGLE_SERVICE_ACCOUNT_FILE` or `GOOGLE_CALENDAR_SERVICE_ACCOUNT_JSON`
-- `GOOGLE_CALENDAR_ID` or `GOOGLE_CALENDAR_MAP_JSON`
+- `RESEND_FROM_EMAIL` (required for reliable delivery in production)
 - `SLACK_WEBHOOK_URL`
+
+Recommended local `DATABASE_URL` in Docker:
+
+- `postgresql://postgres:supersecret@db:5432/appointment_db`
+
+Email notes:
+
+- Booking attempts two email sends independently: one to patient, one to doctor.
+- If booking succeeds but email delivery fails, booking remains confirmed and API response includes explicit email status fields.
 
 ## Run (Docker)
 

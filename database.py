@@ -37,8 +37,8 @@ class Doctor(Base):
     __tablename__ = "doctors"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
-    specialty: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
     appointments: Mapped[List[Appointment]] = relationship(back_populates="doctor")
 
@@ -88,7 +88,7 @@ def _build_daily_slots(target_date: date_type) -> List[datetime]:
 
 
 async def get_daily_stats_db(date: str) -> Dict[str, Any]:
-    """Return appointment analytics for a single calendar day."""
+    """Return appointment analytics for a single day."""
     try:
         target_date = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError:
@@ -126,6 +126,101 @@ async def get_daily_stats_db(date: str) -> Dict[str, Any]:
     }
 
 
+async def list_doctors_db() -> Dict[str, Any]:
+    """Return all available doctors ordered by name."""
+    async with AsyncSessionLocal() as session:
+        try:
+            doctors_result = await session.execute(select(Doctor).order_by(Doctor.name))
+            doctors = doctors_result.scalars().all()
+        except SQLAlchemyError as exc:
+            return {
+                "ok": False,
+                "message": f"Database error while listing doctors: {exc}",
+            }
+
+    serialized = [
+        {
+            "id": doctor.id,
+            "name": doctor.name,
+        }
+        for doctor in doctors
+    ]
+    return {
+        "ok": True,
+        "count": len(serialized),
+        "doctors": serialized,
+    }
+
+
+async def get_or_create_doctor_by_email(doctor_email: str, doctor_name: str) -> Dict[str, Any]:
+    """Ensure a doctor record exists for the provided email."""
+    async with AsyncSessionLocal() as session:
+        try:
+            doctor_result = await session.execute(select(Doctor).where(Doctor.email == doctor_email))
+            doctor = doctor_result.scalar_one_or_none()
+
+            if doctor is None:
+                doctor = Doctor(email=doctor_email, name=doctor_name)
+                session.add(doctor)
+                await session.commit()
+                await session.refresh(doctor)
+                return {
+                    "ok": True,
+                    "created": True,
+                    "doctor": {
+                        "id": doctor.id,
+                        "name": doctor.name,
+                        "email": doctor.email,
+                    },
+                }
+
+            if doctor.name != doctor_name:
+                doctor.name = doctor_name
+                await session.commit()
+
+            return {
+                "ok": True,
+                "created": False,
+                "doctor": {
+                    "id": doctor.id,
+                    "name": doctor.name,
+                    "email": doctor.email,
+                },
+            }
+        except SQLAlchemyError as exc:
+            await session.rollback()
+            return {
+                "ok": False,
+                "message": f"Database error while syncing doctor profile: {exc}",
+            }
+
+
+async def get_doctor_contact_by_name_db(doctor_name: str) -> Dict[str, Any]:
+    """Return doctor contact details by doctor name."""
+    async with AsyncSessionLocal() as session:
+        try:
+            doctor = await _resolve_doctor_by_name(session=session, doctor_name=doctor_name)
+            if doctor is None:
+                return {
+                    "ok": False,
+                    "message": f"Doctor '{doctor_name}' not found.",
+                }
+
+            return {
+                "ok": True,
+                "doctor": {
+                    "id": doctor.id,
+                    "name": doctor.name,
+                    "email": doctor.email,
+                },
+            }
+        except SQLAlchemyError as exc:
+            return {
+                "ok": False,
+                "message": f"Database error while fetching doctor contact: {exc}",
+            }
+
+
 async def init_db() -> None:
     """Create tables and insert an idempotent seed doctor."""
     async with engine.begin() as conn:
@@ -133,10 +228,12 @@ async def init_db() -> None:
 
     async with AsyncSessionLocal() as session:
         try:
-            result = await session.execute(select(Doctor).where(Doctor.name == "Dr. Ahuja"))
+            result = await session.execute(
+                select(Doctor).where(Doctor.email == "dr.ahuja@medagent.local")
+            )
             doctor = result.scalar_one_or_none()
             if doctor is None:
-                session.add(Doctor(name="Dr. Ahuja", specialty="General Medicine"))
+                session.add(Doctor(name="Dr. Ahuja", email="dr.ahuja@medagent.local"))
                 await session.commit()
         except SQLAlchemyError:
             await session.rollback()
