@@ -61,6 +61,27 @@ class Appointment(Base):
     doctor: Mapped[Doctor] = relationship(back_populates="appointments")
 
 
+def _normalize_doctor_name(name: str) -> str:
+    """Normalize doctor names to handle punctuation/spacing variants."""
+    return " ".join(name.lower().replace(".", " ").split())
+
+
+async def _resolve_doctor_by_name(session: AsyncSession, doctor_name: str) -> Doctor | None:
+    """Resolve doctor name by exact match first, then normalized fallback."""
+    exact_result = await session.execute(select(Doctor).where(Doctor.name == doctor_name))
+    exact_doctor = exact_result.scalar_one_or_none()
+    if exact_doctor is not None:
+        return exact_doctor
+
+    normalized_target = _normalize_doctor_name(doctor_name)
+    all_doctors_result = await session.execute(select(Doctor))
+    for doctor in all_doctors_result.scalars().all():
+        if _normalize_doctor_name(doctor.name) == normalized_target:
+            return doctor
+
+    return None
+
+
 def _build_daily_slots(target_date: date_type) -> List[datetime]:
     """Return hourly slots from 09:00 to 17:00 (inclusive)."""
     return [datetime.combine(target_date, time(hour=hour, minute=0)) for hour in range(9, 18)]
@@ -131,8 +152,7 @@ async def get_doctor_availability(doctor_name: str, date: str) -> str:
 
     async with AsyncSessionLocal() as session:
         try:
-            doctor_result = await session.execute(select(Doctor).where(Doctor.name == doctor_name))
-            doctor = doctor_result.scalar_one_or_none()
+            doctor = await _resolve_doctor_by_name(session=session, doctor_name=doctor_name)
             if doctor is None:
                 return f"Doctor '{doctor_name}' not found."
 
@@ -177,8 +197,7 @@ async def book_appointment_db(
     """Book an appointment if the exact slot is still available."""
     async with AsyncSessionLocal() as session:
         try:
-            doctor_result = await session.execute(select(Doctor).where(Doctor.name == doctor_name))
-            doctor = doctor_result.scalar_one_or_none()
+            doctor = await _resolve_doctor_by_name(session=session, doctor_name=doctor_name)
             if doctor is None:
                 return f"Doctor '{doctor_name}' not found."
 

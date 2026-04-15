@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import anyio
+import asyncio
 import json
 from datetime import datetime
 
 from mcp.server.fastmcp import FastMCP
 
-from calendar_service import create_calendar_event
 from database import (
     book_appointment_db as book_appointment_db_helper,
     get_daily_stats_db,
@@ -17,15 +16,31 @@ from email_service import send_booking_confirmation
 from notification_service import send_doctor_report_to_slack
 
 mcp = FastMCP("DoctorAssistant", host="0.0.0.0", port=8001)
+_db_init_lock = asyncio.Lock()
+_db_initialized = False
 
 
 def _as_json(payload: dict) -> str:
     return json.dumps(payload, default=str)
 
 
+async def _ensure_db_initialized() -> None:
+    """Initialize database objects once inside the active server event loop."""
+    global _db_initialized
+    if _db_initialized:
+        return
+
+    async with _db_init_lock:
+        if _db_initialized:
+            return
+        await init_db()
+        _db_initialized = True
+
+
 @mcp.tool()
 async def get_doctor_availability_tool(doctor_name: str, date: str) -> str:
     """Get doctor availability for a date and return normalized JSON text."""
+    await _ensure_db_initialized()
     availability = await get_doctor_availability_helper(doctor_name=doctor_name, date=date)
     success = availability.startswith("Available slots for")
     return _as_json(
@@ -48,6 +63,7 @@ async def book_appointment_tool(
     symptoms: str | None = None,
 ) -> str:
     """Book an appointment and trigger side effects required by the assignment."""
+    await _ensure_db_initialized()
     booking_message = await book_appointment_db_helper(
         doctor_name=doctor_name,
         patient_name=patient_name,
@@ -68,15 +84,6 @@ async def book_appointment_tool(
 
     if not booked:
         return _as_json(result)
-
-    calendar_result = await create_calendar_event(
-        doctor_name=doctor_name,
-        patient_name=patient_name,
-        patient_email=patient_email,
-        date_time=date_time,
-        symptoms=symptoms,
-    )
-    result["calendar"] = calendar_result
 
     try:
         email_delivery = await send_booking_confirmation(
@@ -103,6 +110,7 @@ async def book_appointment_tool(
 @mcp.tool()
 async def get_daily_stats(date: str) -> str:
     """Return daily appointment stats used by doctor reporting flows."""
+    await _ensure_db_initialized()
     stats = await get_daily_stats_db(date)
     if not stats.get("ok"):
         return _as_json(stats)
@@ -118,6 +126,7 @@ async def get_daily_stats(date: str) -> str:
 @mcp.tool()
 async def send_doctor_report_notification(doctor_name: str, doctor_email: str, date: str) -> str:
     """Generate a doctor report and notify via Slack (non-email channel)."""
+    await _ensure_db_initialized()
     stats = await get_daily_stats_db(date)
     if not stats.get("ok"):
         return _as_json(
@@ -161,5 +170,4 @@ async def send_doctor_report_notification(doctor_name: str, doctor_email: str, d
 
 
 if __name__ == "__main__":
-    anyio.run(init_db)
     mcp.run(transport='sse')

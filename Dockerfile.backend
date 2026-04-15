@@ -13,7 +13,7 @@ COPY uv.lock pyproject.toml ./
 RUN uv sync --frozen --no-install-project --no-dev
 
 # Copy the rest of the application code
-COPY database.py main.py mcp_server.py email_service.py calendar_service.py notification_service.py mcp_client.py ./
+COPY database.py main.py mcp_server.py email_service.py notification_service.py mcp_client.py ./
 
 # Place the virtual environment in the system path so Python finds the packages
 ENV PATH="/app/.venv/bin:$PATH"
