@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState } from 'react'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const AppContext = createContext(null)
 
@@ -15,7 +15,24 @@ function initialUser() {
 }
 
 function initialSessionId() {
-  return window.localStorage.getItem('doctor-assistant-session-id') ?? crypto.randomUUID()
+  try {
+    const stored = window.localStorage.getItem('doctor-assistant-session-id')
+    return stored || createSessionId()
+  } catch {
+    return createSessionId()
+  }
+}
+
+function createSessionId() {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+  } catch {
+    // Ignore and fall back to deterministic string generation.
+  }
+
+  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 export function AppProvider({ children }) {
@@ -25,6 +42,40 @@ export function AppProvider({ children }) {
   const [isLoading, setIsLoading] = useState(false)
   const [reportStatus, setReportStatus] = useState(null)
   const [sessionId, setSessionId] = useState(initialSessionId)
+
+  const postChatPrompt = async (text) => {
+    const response = await fetch(`${API_BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: text,
+        role,
+        session_id: sessionId,
+        user_name: user?.name ?? null,
+        user_email: user?.email ?? null,
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error('Backend returned an error')
+    }
+
+    return response.json()
+  }
+
+  const appendAssistantMessage = (data) => {
+    const assistantText =
+      typeof data?.response === 'string' && data.response.trim()
+        ? data.response
+        : 'I could not parse the backend response.'
+
+    if (typeof data?.session_id === 'string' && data.session_id.trim()) {
+      setSession(data.session_id)
+    }
+
+    setMessages((prev) => [...prev, { role: 'assistant', content: assistantText }])
+    return assistantText
+  }
 
   const setUser = (profile) => {
     setUserState(profile)
@@ -49,33 +100,8 @@ export function AppProvider({ children }) {
     setIsLoading(true)
 
     try {
-      const response = await fetch(`${API_BASE}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: text,
-          role,
-          session_id: sessionId,
-          user_name: user?.name ?? null,
-          user_email: user?.email ?? null,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error('Backend returned an error')
-      }
-
-      const data = await response.json()
-      const assistantText =
-        typeof data?.response === 'string' && data.response.trim()
-          ? data.response
-          : 'I could not parse the backend response.'
-
-      if (typeof data?.session_id === 'string' && data.session_id.trim()) {
-        setSession(data.session_id)
-      }
-
-      setMessages((prev) => [...prev, { role: 'assistant', content: assistantText }])
+      const data = await postChatPrompt(text)
+      appendAssistantMessage(data)
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -110,32 +136,24 @@ export function AppProvider({ children }) {
     setIsLoading(true)
     setReportStatus({ state: 'loading', message: 'Sending doctor report notification...' })
 
+    const reportPrompt = date
+      ? `Generate my daily report for ${date} and notify me on Slack.`
+      : 'Generate my daily report for today and notify me on Slack.'
+
     try {
-      const response = await fetch(`${API_BASE}/api/doctor/report-notify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          doctor_name: user?.name ?? 'Doctor',
-          doctor_email: user.email,
-          date,
-        }),
-      })
+      setMessages((prev) => [...prev, { role: 'user', content: reportPrompt }])
 
-      if (!response.ok) {
-        throw new Error('Backend returned an error')
-      }
-
-      const data = await response.json()
-      const reportText = typeof data?.report === 'string' ? data.report.trim() : ''
-
-      if (reportText) {
-        setMessages((prev) => [...prev, { role: 'assistant', content: reportText }])
-      }
-
-      const sent = Boolean(data?.sent)
+      const data = await postChatPrompt(reportPrompt)
+      const reportText = appendAssistantMessage(data)
+      const toolOutcomes = Array.isArray(data?.tool_outcomes) ? data.tool_outcomes : []
+      const reportOutcome = [...toolOutcomes].reverse().find(
+        (entry) => entry?.tool === 'send_doctor_report_notification',
+      )
+      const notification = reportOutcome?.result?.notification
+      const sent = Boolean(notification?.ok) || Boolean(reportOutcome?.result?.ok)
       const statusMessage = sent
         ? 'Doctor report sent to Slack.'
-        : data?.notification?.message || 'Report generated, but Slack delivery failed.'
+        : notification?.message || reportText || 'Report generated, but Slack delivery failed.'
 
       setReportStatus({
         state: sent ? 'success' : 'error',
@@ -159,7 +177,7 @@ export function AppProvider({ children }) {
     setUser(null)
     setMessages([])
     setReportStatus(null)
-    const freshSessionId = crypto.randomUUID()
+    const freshSessionId = createSessionId()
     setSession(freshSessionId)
   }
 

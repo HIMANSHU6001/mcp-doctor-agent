@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -37,6 +38,108 @@ async def _ensure_db_initialized() -> None:
             return
         await init_db()
         _db_initialized = True
+
+
+@mcp.prompt(name="patient_booking_prompt", description="Reusable prompt for patient appointment booking")
+def patient_booking_prompt(
+    doctor_name: str,
+    date: str,
+    patient_name: str | None = None,
+) -> list[dict[str, str]]:
+    resolved_patient_name = patient_name or "the patient"
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a patient appointment assistant. Use MCP tools to check availability, "
+                "book the slot if requested, and clearly report booking and email delivery status."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"{resolved_patient_name} wants to book an appointment with {doctor_name} on {date}. "
+                "Check availability first, then book the appointment only if the requested slot is open."
+            ),
+        },
+    ]
+
+
+@mcp.prompt(name="doctor_report_prompt", description="Reusable prompt for doctor summary reporting")
+def doctor_report_prompt(
+    doctor_name: str,
+    date: str | None = None,
+) -> list[dict[str, str]]:
+    target_date = date or "today"
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a doctor reporting assistant. Use MCP tools to fetch daily stats and "
+                "send a Slack notification when the user asks for a report."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Generate the daily summary for {doctor_name} for {target_date} and notify the doctor via Slack."
+            ),
+        },
+    ]
+
+
+@mcp.resource(
+    "resource://doctor-assistant/guide",
+    name="doctor_assistant_guide",
+    description="Reusable workflow guide for the doctor assistant",
+)
+async def doctor_assistant_guide() -> dict[str, Any]:
+    return {
+        "app": "MCP Doctor Agent",
+        "scenarios": {
+            "patient": [
+                "Check doctor availability",
+                "Book a confirmed appointment",
+                "Send patient and doctor notifications",
+            ],
+            "doctor": [
+                "Fetch daily stats",
+                "Summarize appointment volume and fever mentions",
+                "Deliver a Slack notification",
+            ],
+        },
+        "delivery_channels": {
+            "patient_confirmation": "Resend email",
+            "doctor_notification": "Slack webhook",
+        },
+        "sample_prompts": [
+            "I want to book an appointment with Dr. Ahuja tomorrow morning.",
+            "How many patients visited yesterday?",
+            "Generate my daily report and notify me.",
+        ],
+    }
+
+
+@mcp.resource(
+    "resource://doctor-assistant/doctors/{doctor_name}",
+    name="doctor_profile_resource",
+    description="Read-only doctor profile and contact details",
+)
+async def doctor_profile_resource(doctor_name: str) -> dict[str, Any]:
+    await _ensure_db_initialized()
+    doctor_contact = await get_doctor_contact_by_name_db(doctor_name=doctor_name)
+    if not doctor_contact.get("ok"):
+        return {
+            "ok": False,
+            "doctor_name": doctor_name,
+            "message": doctor_contact.get("message", "Doctor profile unavailable."),
+        }
+
+    return {
+        "ok": True,
+        "doctor": doctor_contact.get("doctor", {}),
+        "message": f"Read-only profile for {doctor_name}.",
+    }
 
 
 @mcp.tool()

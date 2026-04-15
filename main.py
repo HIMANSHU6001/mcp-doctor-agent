@@ -45,7 +45,7 @@ SYSTEM_PROMPTS: Dict[str, str] = {
         "You are a healthcare appointment assistant helping a doctor manage appointments. "
         "Use tools for schedule lookup and reporting actions. "
         "When asked for daily stats, call get_daily_stats. "
-        "When asked to send or notify a report, call send_doctor_report_notification. "
+        "When asked to send or notify a report, call get_daily_stats first and then call send_doctor_report_notification. "
         "Be precise and operationally focused."
     ),
 }
@@ -128,6 +128,13 @@ def _parse_json_if_possible(raw_text: str) -> Any:
             except Exception:
                 continue
         return raw_text
+
+
+def _find_tool_outcome(tool_outcomes: List[Dict[str, Any]], tool_name: str) -> Dict[str, Any] | None:
+    for outcome in reversed(tool_outcomes):
+        if outcome.get("tool") == tool_name:
+            return outcome
+    return None
 
 
 @app.on_event("startup")
@@ -330,39 +337,47 @@ async def chat_endpoint(payload: ChatRequest) -> ChatResponse:
 async def doctor_report_notify_endpoint(payload: DoctorReportRequest) -> DoctorReportResponse:
     target_date = payload.date or datetime.now().strftime("%Y-%m-%d")
 
+    prompt = (
+        f"Generate my daily report for {target_date} and notify me on Slack. "
+        f"I am {payload.doctor_name} and my email is {payload.doctor_email}."
+    )
+
     try:
-        result_text = await mcp_tool_client.call_tool(
-            name="send_doctor_report_notification",
-            arguments={
-                "doctor_name": payload.doctor_name,
-                "doctor_email": payload.doctor_email,
-                "date": target_date,
-            },
+        response_text, tool_outcomes = await process_chat(
+            prompt=prompt,
+            role="doctor",
+            session_id=f"doctor-report:{payload.doctor_email}",
+            user_name=payload.doctor_name,
+            user_email=payload.doctor_email,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"MCP report notification failed: {exc}") from exc
 
-    parsed = _parse_json_if_possible(result_text)
+    report_outcome = _find_tool_outcome(tool_outcomes, "send_doctor_report_notification")
+    notification: Dict[str, Any] = {}
+    sent = False
+    report = response_text
 
-    if isinstance(parsed, dict):
-        notification = parsed.get("notification", {})
-        if not isinstance(notification, dict):
-            notification = {"raw": notification}
+    if report_outcome is not None:
+        parsed_report = report_outcome.get("result")
+        if isinstance(parsed_report, dict):
+            notification_value = parsed_report.get("notification", {})
+            if isinstance(notification_value, dict):
+                notification = notification_value
+            else:
+                notification = {"raw": notification_value}
 
-        report = str(parsed.get("report") or parsed.get("summary") or parsed.get("message") or result_text)
-        # Check notification.ok first (Slack response), then top-level ok
-        sent = bool(notification.get("ok")) or bool(parsed.get("ok", False))
-
-        return DoctorReportResponse(
-            report=report,
-            date=target_date,
-            sent=sent,
-            notification=notification,
-        )
+            report = str(
+                parsed_report.get("report")
+                or parsed_report.get("summary")
+                or parsed_report.get("message")
+                or response_text
+            )
+            sent = bool(notification.get("ok")) or bool(parsed_report.get("ok", False))
 
     return DoctorReportResponse(
-        report=str(parsed),
+        report=report,
         date=target_date,
-        sent=False,
-        notification={"raw": str(parsed)},
+        sent=sent,
+        notification=notification,
     )

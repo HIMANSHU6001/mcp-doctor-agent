@@ -28,6 +28,7 @@ A full-stack doctor appointment assistant demonstrating strict MCP client-server
 - Tool schemas are discovered dynamically from MCP server (no hardcoded tool schemas in API backend).
 - Tool orchestration is LLM-driven via tool calls.
 - Client/API server/MCP server/tool logic are separated into dedicated modules.
+- MCP prompt and resource surfaces are exposed at runtime alongside tools.
 
 ## Implemented Scenarios
 
@@ -47,7 +48,7 @@ A full-stack doctor appointment assistant demonstrating strict MCP client-server
 - Non-email notification via `send_doctor_report_notification` (Slack webhook).
 - Trigger methods:
   - natural language prompts in chat,
-  - dashboard button (frontend) calling `/api/doctor/report-notify`.
+  - dashboard button that now routes through the same chat orchestration path.
 
 ## Environment Setup
 
@@ -60,6 +61,8 @@ Copy `.env.example` to `.env` and configure at minimum:
 - `RESEND_API_KEY`
 - `RESEND_FROM_EMAIL` (required for reliable delivery in production)
 - `SLACK_WEBHOOK_URL`
+
+Calendar integration is intentionally deferred in this submission.
 
 Recommended local `DATABASE_URL` in Docker:
 
@@ -94,6 +97,13 @@ Doctor:
 
 - "How many patients visited yesterday?"
 - "Generate my daily report and notify me."
+
+Available MCP prompt/resource entries:
+
+- `patient_booking_prompt`
+- `doctor_report_prompt`
+- `resource://doctor-assistant/guide`
+- `resource://doctor-assistant/doctors/{doctor_name}`
 
 ## API Summary
 
