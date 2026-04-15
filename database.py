@@ -87,6 +87,21 @@ def _build_daily_slots(target_date: date_type) -> List[datetime]:
     return [datetime.combine(target_date, time(hour=hour, minute=0)) for hour in range(9, 18)]
 
 
+def _validate_booking_datetime(date_time: datetime) -> str | None:
+    """Validate that appointment time is timezone-naive and within supported hourly slots."""
+    if date_time.tzinfo is not None and date_time.tzinfo.utcoffset(date_time) is not None:
+        return "Invalid appointment time. Please provide local time without timezone."
+
+    if date_time.minute != 0 or date_time.second != 0 or date_time.microsecond != 0:
+        return "Appointments must be booked on the hour (e.g., 09:00, 15:00)."
+
+    valid_slots = _build_daily_slots(date_time.date())
+    if date_time not in valid_slots:
+        return "Appointments can only be booked between 09:00 and 17:00 on hourly slots."
+
+    return None
+
+
 async def get_daily_stats_db(date: str) -> Dict[str, Any]:
     """Return appointment analytics for a single day."""
     try:
@@ -291,12 +306,16 @@ async def book_appointment_db(
     date_time: datetime,
     symptoms: str | None = None,
 ) -> str:
-    """Book an appointment if the exact slot is still available."""
+    """Book an appointment if the slot is valid and still available."""
     async with AsyncSessionLocal() as session:
         try:
             doctor = await _resolve_doctor_by_name(session=session, doctor_name=doctor_name)
             if doctor is None:
                 return f"Doctor '{doctor_name}' not found."
+
+            validation_error = _validate_booking_datetime(date_time)
+            if validation_error:
+                return validation_error
 
             conflict_result = await session.execute(
                 select(Appointment).where(

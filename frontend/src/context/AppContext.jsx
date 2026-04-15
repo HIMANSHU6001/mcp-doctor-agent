@@ -2,6 +2,8 @@
 import { createContext, useContext, useState } from 'react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const ROLE_STORAGE_KEY = 'doctor-assistant-role'
+const VALID_ROLES = new Set(['patient', 'doctor'])
 
 const AppContext = createContext(null)
 
@@ -23,6 +25,15 @@ function initialSessionId() {
   }
 }
 
+function initialRole() {
+  try {
+    const storedRole = window.localStorage.getItem(ROLE_STORAGE_KEY)
+    return VALID_ROLES.has(storedRole) ? storedRole : 'patient'
+  } catch {
+    return 'patient'
+  }
+}
+
 function createSessionId() {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -36,7 +47,7 @@ function createSessionId() {
 }
 
 export function AppProvider({ children }) {
-  const [role, setRole] = useState('patient')
+  const [role, setRoleState] = useState(initialRole)
   const [user, setUserState] = useState(initialUser)
   const [messages, setMessages] = useState([])
   const [isLoading, setIsLoading] = useState(false)
@@ -89,6 +100,12 @@ export function AppProvider({ children }) {
   const setSession = (nextSessionId) => {
     setSessionId(nextSessionId)
     window.localStorage.setItem('doctor-assistant-session-id', nextSessionId)
+  }
+
+  const setRole = (nextRole) => {
+    const normalizedRole = VALID_ROLES.has(nextRole) ? nextRole : 'patient'
+    setRoleState(normalizedRole)
+    window.localStorage.setItem(ROLE_STORAGE_KEY, normalizedRole)
   }
 
   const sendMessage = async (text) => {
@@ -174,6 +191,7 @@ export function AppProvider({ children }) {
   }
 
   const logout = () => {
+    setRole('patient')
     setUser(null)
     setMessages([])
     setReportStatus(null)
