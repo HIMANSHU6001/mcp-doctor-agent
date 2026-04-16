@@ -135,7 +135,6 @@ Known risk in current code:
   - Current strategy: DB remains source of truth for appointments; notifications are sent via email/Slack.
 - Session memory is in-process (not durable); restarting API clears chat history.
 - Automated tests are minimal in current repository state.
-- Frontend auth request path currently uses a hardcoded API base in auth screen; chat path supports env-based API base.
 
 ## 13. Future Enhancements
 - Add durable conversation memory (Redis or DB-backed).
