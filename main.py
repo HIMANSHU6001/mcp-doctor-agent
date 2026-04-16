@@ -53,7 +53,11 @@ SYSTEM_PROMPTS: Dict[str, str] = {
 app = FastAPI(title="Doctor Assistant Backend")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",             
+        "http://localhost:3000",            
+        "https://mediagent.himanshu6001.dev" 
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

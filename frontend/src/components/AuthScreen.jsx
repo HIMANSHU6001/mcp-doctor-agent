@@ -6,7 +6,7 @@ import { useApp } from '../context/AppContext'
 import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_BASE_URL
 
 const AuthScreen = () => {
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
