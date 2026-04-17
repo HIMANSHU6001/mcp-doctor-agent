@@ -23,7 +23,6 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - RESEND_API_KEY=${RESEND_API_KEY}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL}
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
     ports:
       - "8001:8001"
     depends_on:
@@ -42,7 +41,10 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - MCP_SERVER_URL=http://mcp-server:8001/sse
-      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_CLIENT_ID=${SLACK_CLIENT_ID}
+      - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET}
+      - FRONTEND_BASE_URL=${FRONTEND_BASE_URL}
+      - SLACK_REDIRECT_URI=${SLACK_REDIRECT_URI}
     ports:
       - "8000:8000"
     depends_on:
@@ -56,6 +58,7 @@ services:
       args:
         - VITE_API_BASE_URL=${VITE_API_BASE_URL}
         - VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID}
+        - VITE_SLACK_CLIENT_ID=${VITE_SLACK_CLIENT_ID}
     container_name: mcp_frontend
     restart: unless-stopped
     ports:

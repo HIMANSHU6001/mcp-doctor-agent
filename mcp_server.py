@@ -10,12 +10,17 @@ from mcp.server.fastmcp import FastMCP
 from database import (
     book_appointment_db as book_appointment_db_helper,
     get_doctor_contact_by_name_db,
+    get_doctor_slack_credentials_by_email,
     get_daily_stats_db,
     get_doctor_availability as get_doctor_availability_helper,
     init_db,
     list_doctors_db,
 )
-from email_service import send_booking_confirmation, send_doctor_appointment_notification
+from email_service import (
+    send_booking_confirmation,
+    send_doctor_appointment_notification,
+    send_doctor_daily_report_email,
+)
 from notification_service import send_doctor_report_to_slack
 
 mcp = FastMCP("DoctorAssistant", host="0.0.0.0", port=8001)
@@ -36,7 +41,7 @@ async def _ensure_db_initialized() -> None:
     async with _db_init_lock:
         if _db_initialized:
             return
-        await init_db()
+        await init_db(reset_schema=False)
         _db_initialized = True
 
 
@@ -76,13 +81,13 @@ def doctor_report_prompt(
             "role": "system",
             "content": (
                 "You are a doctor reporting assistant. Use MCP tools to fetch daily stats and "
-                "send a Slack notification when the user asks for a report."
+                "send a report email always, then send Slack DM if Slack is connected."
             ),
         },
         {
             "role": "user",
             "content": (
-                f"Generate the daily summary for {doctor_name} for {target_date} and notify the doctor via Slack."
+                f"Generate the daily summary for {doctor_name} for {target_date} and notify the doctor by email and Slack when available."
             ),
         },
     ]
@@ -105,12 +110,13 @@ async def doctor_assistant_guide() -> dict[str, Any]:
             "doctor": [
                 "Fetch daily stats",
                 "Summarize appointment volume and fever mentions",
-                "Deliver a Slack notification",
+                "Deliver an email report",
+                "Deliver a Slack DM when connected",
             ],
         },
         "delivery_channels": {
             "patient_confirmation": "Resend email",
-            "doctor_notification": "Slack webhook",
+            "doctor_notification": "Resend email + Slack DM",
         },
         "sample_prompts": [
             "I want to book an appointment with Dr. Ahuja tomorrow morning.",
@@ -314,7 +320,7 @@ async def get_daily_stats(date: str) -> str:
 
 @mcp.tool()
 async def send_doctor_report_notification(doctor_name: str, doctor_email: str, date: str) -> str:
-    """Generate a doctor report and notify via Slack (non-email channel)."""
+    """Generate a doctor report and notify via email and optional Slack DM."""
     await _ensure_db_initialized()
     stats = await get_daily_stats_db(date)
     if not stats.get("ok"):
@@ -323,11 +329,21 @@ async def send_doctor_report_notification(doctor_name: str, doctor_email: str, d
                 "ok": False,
                 "tool": "send_doctor_report_notification",
                 "date": date,
+                "delivery_status": "failed",
                 "message": stats.get("message", "Unable to fetch daily stats."),
-                "notification": {
-                    "ok": False,
-                    "channel": "slack",
-                    "message": "Skipped because stats query failed.",
+                "delivery": {
+                    "email": {
+                        "ok": False,
+                        "channel": "email",
+                        "status": "skipped",
+                        "message": "Skipped because stats query failed.",
+                    },
+                    "slack": {
+                        "ok": False,
+                        "channel": "slack",
+                        "status": "skipped",
+                        "message": "Skipped because stats query failed.",
+                    },
                 },
             }
         )
@@ -337,23 +353,112 @@ async def send_doctor_report_notification(doctor_name: str, doctor_email: str, d
         f"{stats['fever_mentions']} patients reported fever."
     )
 
-    notification = await send_doctor_report_to_slack(
-        doctor_name=doctor_name,
-        doctor_email=doctor_email,
-        date=date,
-        report_text=report,
-        stats=stats,
-    )
+    try:
+        email_provider_response = await send_doctor_daily_report_email(
+            doctor_email=doctor_email,
+            doctor_name=doctor_name,
+            date=date,
+            report_text=report,
+            stats=stats,
+        )
+        email_delivery = {
+            "ok": True,
+            "channel": "email",
+            "status": "sent",
+            "message": "Report sent to email.",
+            "provider": "resend",
+            "response": str(email_provider_response),
+        }
+    except Exception as exc:
+        email_delivery = {
+            "ok": False,
+            "channel": "email",
+            "status": "failed",
+            "message": f"Email delivery failed: {exc}",
+            "provider": "resend",
+        }
+
+    advisory: str | None = None
+    slack_connected = False
+    slack_delivery: dict[str, Any] = {
+        "ok": False,
+        "channel": "slack",
+        "status": "not_connected",
+        "message": "Connect to Slack to get report on your Slack.",
+    }
+
+    slack_credentials = await get_doctor_slack_credentials_by_email(doctor_email=doctor_email)
+    if not slack_credentials.get("ok"):
+        slack_delivery = {
+            "ok": False,
+            "channel": "slack",
+            "status": "unavailable",
+            "message": slack_credentials.get("message", "Could not read Slack credentials."),
+        }
+    else:
+        doctor = slack_credentials.get("doctor", {})
+        bot_token = str(doctor.get("slack_bot_token") or "").strip()
+        user_id = str(doctor.get("slack_user_id") or "").strip()
+        slack_connected = bool(bot_token and user_id)
+
+        if slack_connected:
+            slack_delivery = await send_doctor_report_to_slack(
+                doctor_name=doctor_name,
+                doctor_email=doctor_email,
+                date=date,
+                report_text=report,
+                stats=stats,
+                bot_token=bot_token,
+                user_id=user_id,
+            )
+        else:
+            advisory = "Connect to Slack to get report on your Slack."
+
+    email_ok = bool(email_delivery.get("ok"))
+    slack_ok = bool(slack_delivery.get("ok"))
+
+    if email_ok and slack_connected and slack_ok:
+        delivery_status = "all_success"
+        message = "Report sent to email and Slack."
+    elif email_ok and not slack_connected:
+        delivery_status = "partial_success"
+        advisory = advisory or "Connect to Slack to get report on your Slack."
+        message = "Report sent to email. Connect to Slack to get report on your Slack."
+    elif email_ok and slack_connected and not slack_ok:
+        delivery_status = "partial_success"
+        message = f"Report sent to email, but Slack delivery failed: {slack_delivery.get('message', 'Unknown Slack error.')}"
+    elif not email_ok and slack_ok:
+        delivery_status = "partial_success"
+        message = f"Report sent to Slack, but email delivery failed: {email_delivery.get('message', 'Unknown email error.')}"
+    else:
+        delivery_status = "failed"
+        message = "Unable to deliver the report by email or Slack."
+
+    overall_ok = delivery_status != "failed"
+    notification = {
+        "ok": overall_ok,
+        "delivery_status": delivery_status,
+        "message": message,
+        "email": email_delivery,
+        "slack": slack_delivery,
+    }
 
     return _as_json(
         {
-            "ok": notification.get("ok", False),
+            "ok": overall_ok,
             "tool": "send_doctor_report_notification",
             "doctor_name": doctor_name,
             "doctor_email": doctor_email,
             "date": date,
             "report": report,
             "stats": stats,
+            "delivery_status": delivery_status,
+            "delivery": {
+                "email": email_delivery,
+                "slack": slack_delivery,
+            },
+            "advisory": advisory,
+            "message": message,
             "notification": notification,
         }
     )

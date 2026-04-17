@@ -1,6 +1,7 @@
 import { GoogleLogin } from '@react-oauth/google'
 import { Stethoscope, User as UserIcon } from 'lucide-react'
 import { useState } from 'react'
+import { toast } from 'sonner'
 
 import { useApp } from '../context/AppContext'
 import { Button } from './ui/button'
@@ -16,6 +17,7 @@ const AuthScreen = () => {
   const handleGoogleSuccess = async (credentialResponse) => {
     const token = credentialResponse?.credential
     if (!token) {
+      toast.error('Google sign-in failed: missing token.')
       return
     }
 
@@ -29,7 +31,16 @@ const AuthScreen = () => {
       })
 
       if (!response.ok) {
-        throw new Error('Google sign-in failed')
+        let detail = 'Google sign-in failed.'
+        try {
+          const payload = await response.json()
+          if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+            detail = payload.detail
+          }
+        } catch {
+          // Ignore JSON parse failures and use the fallback message.
+        }
+        throw new Error(detail)
       }
 
       const data = await response.json()
@@ -37,7 +48,11 @@ const AuthScreen = () => {
         name: data.name,
         email: data.email,
         picture: data.picture ?? null,
+        slackConnected: Boolean(data.slack_connected),
       })
+      toast.success('Logged in successfully.')
+    } catch (error) {
+      toast.error(error?.message || 'Login failed. Please try again.')
     } finally {
       setIsAuthenticating(false)
     }
@@ -96,6 +111,7 @@ const AuthScreen = () => {
                   onSuccess={handleGoogleSuccess}
                   onError={() => {
                     setIsAuthenticating(false)
+                    toast.error('Google sign-in failed. Please try again.')
                   }}
                   text="signin_with"
                   shape="rectangular"

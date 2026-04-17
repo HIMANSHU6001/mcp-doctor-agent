@@ -13,7 +13,7 @@ For architecture decisions and constraints aligned to this repository, see `TRD.
 - LLM: OpenAI tool-calling
 - External services:
   - Resend email (patient confirmations + doctor booking notifications)
-  - Slack webhook (doctor report notifications)
+  - Slack OAuth + Slack Web API DM (doctor report notifications)
 
 ## Architecture
 
@@ -48,7 +48,8 @@ For architecture decisions and constraints aligned to this repository, see `TRD.
 ### Scenario 2: Doctor summary and notification
 
 - Doctor stats via `get_daily_stats`.
-- Non-email notification via `send_doctor_report_notification` (Slack webhook).
+- Email delivery via `send_doctor_report_notification` (always attempted).
+- Slack DM delivery via `send_doctor_report_notification` when the doctor has connected Slack.
 - Trigger methods:
   - natural language prompts in chat,
   - dashboard button that now routes through the same chat orchestration path.
@@ -63,7 +64,10 @@ Copy `.env.example` to `.env` and configure at minimum:
 - `GOOGLE_CLIENT_ID`
 - `RESEND_API_KEY`
 - `RESEND_FROM_EMAIL` (required for reliable delivery in production)
-- `SLACK_WEBHOOK_URL`
+- `SLACK_CLIENT_ID`
+- `SLACK_CLIENT_SECRET`
+- `FRONTEND_BASE_URL`
+- `VITE_SLACK_CLIENT_ID` (frontend)
 
 Calendar integration is intentionally deferred in this submission due to Google OAuth sensitive scope policy and verification overhead.
 
@@ -99,7 +103,7 @@ Patient:
 Doctor:
 
 - "How many patients visited yesterday?"
-- "Generate my daily report and notify me."
+- "Generate my daily report and send it to my email and Slack if connected."
 
 Available MCP prompt/resource entries:
 
@@ -111,10 +115,11 @@ Available MCP prompt/resource entries:
 ## API Summary
 
 - `POST /api/auth/google`
+- `GET /api/auth/slack/callback`
 - `POST /api/chat`
 - `POST /api/doctor/report-notify`
 
 ## Known Limitations
 
 - Session memory is in-process and resets when the API service restarts.
-- Frontend chat calls support `VITE_API_BASE_URL`, but Google auth call path currently targets `http://localhost:8000` in the auth screen source.
+- API startup intentionally performs a destructive schema reset (`doctors` and `appointments`) for this rollout.

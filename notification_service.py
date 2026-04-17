@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import asyncio
-import json
-import os
 from datetime import datetime
 from typing import Any, Dict
-from urllib import error, request
+
+import httpx
 
 
 async def send_doctor_report_to_slack(
@@ -14,15 +12,17 @@ async def send_doctor_report_to_slack(
     doctor_email: str,
     date: str,
     report_text: str,
+    bot_token: str,
+    user_id: str,
     stats: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Send a doctor report notification using an incoming Slack webhook."""
-    webhook_url = os.getenv("SLACK_WEBHOOK_URL", "").strip()
-    if not webhook_url:
+    """Send a doctor report notification to a doctor's Slack DM."""
+    if not bot_token or not user_id:
         return {
             "ok": False,
             "channel": "slack",
-            "message": "SLACK_WEBHOOK_URL is missing.",
+            "status": "not_connected",
+            "message": "Connect to Slack to get report on your Slack.",
         }
 
     appointment_count = int((stats or {}).get("appointment_count", 0))
@@ -33,6 +33,7 @@ async def send_doctor_report_to_slack(
             f"Doctor report | {doctor_name} | {date} | "
             f"appointments={appointment_count}, fever_mentions={fever_mentions}"
         ),
+        "channel": user_id,
         "blocks": [
             {
                 "type": "header",
@@ -64,7 +65,7 @@ async def send_doctor_report_to_slack(
                     },
                     {
                         "type": "mrkdwn",
-                        "text": "*Notification Channel*\nSlack Webhook",
+                        "text": "*Notification Channel*\nSlack DM",
                     },
                     {
                         "type": "mrkdwn",
@@ -94,37 +95,46 @@ async def send_doctor_report_to_slack(
         ],
     }
 
-    body = json.dumps(payload).encode("utf-8")
-
-    def _post() -> tuple[int, str]:
-        req = request.Request(
-            webhook_url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with request.urlopen(req, timeout=12) as response:
-            response_body = response.read().decode("utf-8")
-            return response.status, response_body
-
     try:
-        status_code, response_text = await asyncio.to_thread(_post)
-    except error.HTTPError as exc:
-        return {
-            "ok": False,
-            "channel": "slack",
-            "message": f"Slack webhook failed: {exc.code} {exc.reason}",
-        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                "https://slack.com/api/chat.postMessage",
+                headers={
+                    "Authorization": f"Bearer {bot_token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
     except Exception as exc:
         return {
             "ok": False,
             "channel": "slack",
-            "message": f"Slack webhook failed: {exc}",
+            "status": "failed",
+            "message": f"Slack DM failed: {exc}",
+        }
+
+    try:
+        response_payload = response.json()
+    except ValueError:
+        return {
+            "ok": False,
+            "channel": "slack",
+            "status": "failed",
+            "message": "Slack DM failed: invalid response from Slack API.",
+        }
+
+    if not response_payload.get("ok"):
+        return {
+            "ok": False,
+            "channel": "slack",
+            "status": "failed",
+            "message": f"Slack API error: {response_payload.get('error', 'unknown_error')}",
         }
 
     return {
-        "ok": status_code == 200,
+        "ok": True,
         "channel": "slack",
-        "status_code": status_code,
-        "response": response_text,
+        "status": "sent",
+        "message": "Report sent to Slack.",
+        "ts": response_payload.get("ts"),
     }

@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Loader2, LogOut, Send } from 'lucide-react'
+import { Activity, CheckCircle2, Link2, Loader2, LogOut, Send } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import { toast } from 'sonner'
 
 import { useApp } from '../context/AppContext'
 import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+const SLACK_CLIENT_ID = import.meta.env.VITE_SLACK_CLIENT_ID || ''
 
 const ChatScreen = () => {
   const {
@@ -18,6 +22,7 @@ const ChatScreen = () => {
     clearReportStatus,
     sendMessage,
     sendDoctorReportNotification,
+    setSlackConnected,
     logout,
   } = useApp()
   const [input, setInput] = useState('')
@@ -26,6 +31,28 @@ const ChatScreen = () => {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, isLoading])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const slackConnected = params.get('slack_connected')
+    const slackError = params.get('slack_error')
+
+    if (!slackConnected && !slackError) {
+      return
+    }
+
+    if (slackConnected === 'true') {
+      setSlackConnected(true)
+      toast.success('Successfully connected to Slack.')
+    } else {
+      setSlackConnected(false)
+      const readableError = slackError ? slackError.replaceAll('_', ' ') : 'unknown error'
+      toast.error(`Failed to connect Slack: ${readableError}`)
+    }
+
+    const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`
+    window.history.replaceState({}, document.title, cleanUrl)
+  }, [setSlackConnected])
 
   const handleSubmit = (event) => {
     event.preventDefault()
@@ -39,6 +66,25 @@ const ChatScreen = () => {
 
   const handleDailyStats = async () => {
     await sendDoctorReportNotification()
+  }
+
+  const handleConnectSlack = () => {
+    if (user?.slackConnected) {
+      return
+    }
+
+    if (!SLACK_CLIENT_ID) {
+      toast.error('Slack is not configured. Set VITE_SLACK_CLIENT_ID in frontend environment.')
+      return
+    }
+
+    const redirectUri = `${API_BASE}/api/auth/slack/callback`
+    const slackAuthUrl = new URL('https://slack.com/oauth/v2/authorize')
+    slackAuthUrl.searchParams.set('client_id', SLACK_CLIENT_ID)
+    slackAuthUrl.searchParams.set('scope', 'chat:write,users:read.email')
+    slackAuthUrl.searchParams.set('redirect_uri', redirectUri)
+
+    window.location.assign(slackAuthUrl.toString())
   }
 
   return (
@@ -104,16 +150,33 @@ const ChatScreen = () => {
       {role === 'doctor' && (
         <div className="border-t border-slate-200 bg-white/60 px-4 py-2 sm:px-6">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleDailyStats}
-              className="gap-2"
-              disabled={isLoading}
-            >
-              <Activity className="h-4 w-4" />
-              Send Daily Report
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Button
+                variant={user?.slackConnected ? 'secondary' : 'outline'}
+                size="sm"
+                onClick={handleConnectSlack}
+                className="gap-2"
+                disabled={Boolean(user?.slackConnected)}
+              >
+                {user?.slackConnected ? (
+                  <CheckCircle2 className="h-4 w-4" />
+                ) : (
+                  <Link2 className="h-4 w-4" />
+                )}
+                {user?.slackConnected ? 'Connected to Slack' : 'Connect to Slack'}
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDailyStats}
+                className="gap-2"
+                disabled={isLoading}
+              >
+                <Activity className="h-4 w-4" />
+                Send Daily Report
+              </Button>
+            </div>
             {reportStatus && (
               <p
                 className={`text-xs ${
@@ -121,6 +184,8 @@ const ChatScreen = () => {
                     ? 'text-emerald-700'
                     : reportStatus.state === 'loading'
                       ? 'text-slate-500'
+                      : reportStatus.state === 'warning'
+                        ? 'text-amber-700'
                       : 'text-red-600'
                 }`}
               >

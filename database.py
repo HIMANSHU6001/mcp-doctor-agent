@@ -39,6 +39,8 @@ class Doctor(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    slack_bot_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    slack_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     appointments: Mapped[List[Appointment]] = relationship(back_populates="doctor")
 
@@ -186,6 +188,7 @@ async def get_or_create_doctor_by_email(doctor_email: str, doctor_name: str) -> 
                         "id": doctor.id,
                         "name": doctor.name,
                         "email": doctor.email,
+                        "slack_connected": bool(doctor.slack_bot_token and doctor.slack_user_id),
                     },
                 }
 
@@ -200,6 +203,7 @@ async def get_or_create_doctor_by_email(doctor_email: str, doctor_name: str) -> 
                     "id": doctor.id,
                     "name": doctor.name,
                     "email": doctor.email,
+                    "slack_connected": bool(doctor.slack_bot_token and doctor.slack_user_id),
                 },
             }
         except SQLAlchemyError as exc:
@@ -207,6 +211,74 @@ async def get_or_create_doctor_by_email(doctor_email: str, doctor_name: str) -> 
             return {
                 "ok": False,
                 "message": f"Database error while syncing doctor profile: {exc}",
+            }
+
+
+async def update_doctor_slack_credentials_by_email(
+    doctor_email: str,
+    slack_bot_token: str,
+    slack_user_id: str,
+) -> Dict[str, Any]:
+    """Update Slack credentials for a doctor identified by email."""
+    async with AsyncSessionLocal() as session:
+        try:
+            doctor_result = await session.execute(select(Doctor).where(Doctor.email == doctor_email))
+            doctor = doctor_result.scalar_one_or_none()
+            if doctor is None:
+                return {
+                    "ok": False,
+                    "message": f"Doctor '{doctor_email}' not found.",
+                }
+
+            doctor.slack_bot_token = slack_bot_token
+            doctor.slack_user_id = slack_user_id
+            await session.commit()
+            await session.refresh(doctor)
+
+            return {
+                "ok": True,
+                "doctor": {
+                    "id": doctor.id,
+                    "name": doctor.name,
+                    "email": doctor.email,
+                    "slack_connected": bool(doctor.slack_bot_token and doctor.slack_user_id),
+                },
+            }
+        except SQLAlchemyError as exc:
+            await session.rollback()
+            return {
+                "ok": False,
+                "message": f"Database error while saving Slack credentials: {exc}",
+            }
+
+
+async def get_doctor_slack_credentials_by_email(doctor_email: str) -> Dict[str, Any]:
+    """Fetch Slack credential details for a doctor identified by email."""
+    async with AsyncSessionLocal() as session:
+        try:
+            doctor_result = await session.execute(select(Doctor).where(Doctor.email == doctor_email))
+            doctor = doctor_result.scalar_one_or_none()
+            if doctor is None:
+                return {
+                    "ok": False,
+                    "message": f"Doctor '{doctor_email}' not found.",
+                }
+
+            return {
+                "ok": True,
+                "doctor": {
+                    "id": doctor.id,
+                    "name": doctor.name,
+                    "email": doctor.email,
+                    "slack_bot_token": doctor.slack_bot_token,
+                    "slack_user_id": doctor.slack_user_id,
+                    "slack_connected": bool(doctor.slack_bot_token and doctor.slack_user_id),
+                },
+            }
+        except SQLAlchemyError as exc:
+            return {
+                "ok": False,
+                "message": f"Database error while fetching Slack credentials: {exc}",
             }
 
 
@@ -236,23 +308,12 @@ async def get_doctor_contact_by_name_db(doctor_name: str) -> Dict[str, Any]:
             }
 
 
-async def init_db() -> None:
-    """Create tables and insert an idempotent seed doctor."""
+async def init_db(*, reset_schema: bool = True) -> None:
+    """Initialize schema; optionally reset doctors/appointments tables first."""
     async with engine.begin() as conn:
+        if reset_schema:
+            await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
-
-    async with AsyncSessionLocal() as session:
-        try:
-            result = await session.execute(
-                select(Doctor).where(Doctor.email == "dr.ahuja@medagent.local")
-            )
-            doctor = result.scalar_one_or_none()
-            if doctor is None:
-                session.add(Doctor(name="Dr. Ahuja", email="dr.ahuja@medagent.local"))
-                await session.commit()
-        except SQLAlchemyError:
-            await session.rollback()
-            raise
 
 
 async def get_doctor_availability(doctor_name: str, date: str) -> str:

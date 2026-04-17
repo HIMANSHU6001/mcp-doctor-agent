@@ -13,7 +13,7 @@ This TRD is intentionally aligned to the current codebase only. It does not assu
 ## 2. Scope
 In scope:
 - Patient-side availability lookup and appointment booking through MCP tools.
-- Doctor-side daily summary generation and non-email notification via Slack.
+- Doctor-side daily summary generation with email delivery and optional Slack DM delivery.
 - Multi-turn chat continuity using session state.
 - React frontend, FastAPI orchestration layer, FastMCP tool server, PostgreSQL persistence.
 
@@ -33,7 +33,7 @@ Out of scope:
 ### 3.2 Doctor flow
 - User can request daily operational stats in natural language.
 - LLM can invoke MCP tools to compute appointment count and fever mentions.
-- LLM can invoke MCP tool to send summary via Slack webhook (non-email channel).
+- LLM can invoke MCP tool to send summary to email and optionally Slack DM when connected.
 - Doctor report can also be triggered from a frontend action button that routes through the same chat orchestration.
 
 ### 3.3 Multi-turn continuity
@@ -54,7 +54,7 @@ Out of scope:
 - MCP client: SSE client used by API for dynamic `tools/list` and `tools/call`.
 - MCP server: FastMCP host for tools, prompts, and resources.
 - Database: PostgreSQL accessed through SQLAlchemy async + asyncpg.
-- Integrations: Resend (email), Slack incoming webhook (doctor report).
+- Integrations: Resend (email), Slack OAuth + Slack Web API DM (doctor report).
 
 ## 5.2 Runtime flow
 1. Frontend sends prompt to API endpoint.
@@ -75,7 +75,7 @@ Out of scope:
 
 ### 7.1 Entities
 - Doctor:
-  - id, email (unique), name
+  - id, email (unique), name, slack_bot_token, slack_user_id
 - Appointment:
   - id, doctor_id, patient_name, symptoms, appointment_date, status
 
@@ -93,16 +93,20 @@ Out of scope:
 - `POST /api/auth/google`:
   - Verifies Google ID token and returns profile.
   - If role is doctor, ensures doctor profile exists in DB.
+- `GET /api/auth/slack/callback`:
+  - Handles Slack OAuth code exchange.
+  - Saves doctor Slack credentials by matched email.
 - `POST /api/chat`:
   - Main LLM + MCP orchestration endpoint for patient/doctor prompts.
 - `POST /api/doctor/report-notify`:
-  - Convenience endpoint to trigger report generation + Slack notification through doctor role flow.
+  - Convenience endpoint to trigger report generation with email-first + optional Slack delivery.
 
 ## 9. Frontend Behavior
 - Role-based entry (patient/doctor).
 - Google sign-in optional (guarded by `VITE_GOOGLE_CLIENT_ID`).
 - Chat interface for both roles.
-- Doctor-only daily report action.
+- Doctor-only Slack connect action and daily report action.
+- Toast feedback for login/logout, Slack connection outcomes, and report delivery outcomes.
 - Role and session persistence in local storage:
   - role key: `doctor-assistant-role`
   - session key: `doctor-assistant-session-id`
@@ -133,6 +137,7 @@ Known risk in current code:
 - Google Calendar integration is intentionally deferred.
   - Reason: sensitive/restricted OAuth scope compliance overhead and policy verification requirements.
   - Current strategy: DB remains source of truth for appointments; notifications are sent via email/Slack.
+- API startup performs a destructive schema reset for this rollout (doctors and appointments are recreated empty).
 - Session memory is in-process (not durable); restarting API clears chat history.
 - Automated tests are minimal in current repository state.
 

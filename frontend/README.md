@@ -7,7 +7,8 @@ React + Vite frontend for the MCP Doctor Agent.
 - Role-based entry flow (patient or doctor)
 - Optional Google sign-in (enabled when `VITE_GOOGLE_CLIENT_ID` is set)
 - Chat UI connected to FastAPI backend endpoints
-- Doctor action button to trigger daily report notification
+- Doctor Slack connect button and daily report action
+- Toast feedback for login/logout, Slack connect, and report outcomes
 - Role persistence across reload via local storage
 
 ## Prerequisites
@@ -22,13 +23,14 @@ Create `frontend/.env`:
 ```bash
 VITE_GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID
 VITE_API_BASE_URL=http://localhost:8000
+VITE_SLACK_CLIENT_ID=YOUR_SLACK_CLIENT_ID
 ```
 
 Notes:
 
 - If `VITE_GOOGLE_CLIENT_ID` is not set, Google sign-in is disabled and the UI shows setup guidance.
 - Chat API uses `VITE_API_BASE_URL` with fallback `http://localhost:8000`.
-- Google auth API path is currently hardcoded to `http://localhost:8000` in the auth screen source.
+- Slack OAuth URL generation uses `VITE_SLACK_CLIENT_ID`.
 
 ## Run Locally
 

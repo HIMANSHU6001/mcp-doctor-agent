@@ -5,16 +5,23 @@ import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Literal
+from urllib.parse import urlencode
 
+import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from google.auth.transport.requests import Request
+from fastapi.responses import RedirectResponse
+from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from database import get_or_create_doctor_by_email, init_db
+from database import (
+    get_or_create_doctor_by_email,
+    init_db,
+    update_doctor_slack_credentials_by_email,
+)
 from mcp_client import MCPToolClient
 
 load_dotenv()
@@ -22,9 +29,13 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001/sse")
+SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID", "").strip()
+SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET", "").strip()
+SLACK_REDIRECT_URI = os.getenv("SLACK_REDIRECT_URI", "").strip()
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000").rstrip("/")
 
 openai_client: AsyncOpenAI | None = None
-google_request = Request()
+google_request = GoogleRequest()
 mcp_tool_client = MCPToolClient(server_url=MCP_SERVER_URL)
 
 SESSION_MEMORY: Dict[str, List[Dict[str, str]]] = {}
@@ -46,6 +57,7 @@ SYSTEM_PROMPTS: Dict[str, str] = {
         "Use tools for schedule lookup and reporting actions. "
         "When asked for daily stats, call get_daily_stats. "
         "When asked to send or notify a report, call get_daily_stats first and then call send_doctor_report_notification. "
+        "Reports must be emailed, and Slack delivery is additional when connected. "
         "Be precise and operationally focused."
     ),
 }
@@ -87,6 +99,7 @@ class GoogleAuthResponse(BaseModel):
     email: str
     name: str
     picture: str | None = None
+    slack_connected: bool = False
 
 
 class DoctorReportRequest(BaseModel):
@@ -141,9 +154,16 @@ def _find_tool_outcome(tool_outcomes: List[Dict[str, Any]], tool_name: str) -> D
     return None
 
 
+def _build_frontend_redirect(params: Dict[str, str]) -> str:
+    query = urlencode(params)
+    if query:
+        return f"{FRONTEND_BASE_URL}/?{query}"
+    return f"{FRONTEND_BASE_URL}/"
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
-    await init_db()
+    await init_db(reset_schema=True)
     await mcp_tool_client.connect()
 
 
@@ -169,6 +189,7 @@ async def google_auth_endpoint(payload: GoogleAuthRequest) -> GoogleAuthResponse
     if not email or not name:
         raise HTTPException(status_code=401, detail="Google token did not include profile information.")
 
+    slack_connected = False
     if payload.role == "doctor":
         sync_result = await get_or_create_doctor_by_email(doctor_email=email, doctor_name=name)
         if not sync_result.get("ok"):
@@ -176,8 +197,185 @@ async def google_auth_endpoint(payload: GoogleAuthRequest) -> GoogleAuthResponse
                 status_code=500,
                 detail=sync_result.get("message", "Failed to sync doctor profile."),
             )
+        doctor = sync_result.get("doctor")
+        if isinstance(doctor, dict):
+            slack_connected = bool(doctor.get("slack_connected"))
 
-    return GoogleAuthResponse(email=email, name=name, picture=picture)
+    return GoogleAuthResponse(
+        email=email,
+        name=name,
+        picture=picture,
+        slack_connected=slack_connected,
+    )
+
+
+@app.get("/api/auth/slack/callback", name="slack_oauth_callback")
+async def slack_oauth_callback(
+    request: Request,
+    code: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    if error:
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": error,
+                }
+            )
+        )
+
+    if not code:
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": "missing_code",
+                }
+            )
+        )
+
+    if not SLACK_CLIENT_ID or not SLACK_CLIENT_SECRET:
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": "missing_slack_client_config",
+                }
+            )
+        )
+
+    redirect_uri = SLACK_REDIRECT_URI or str(request.url_for("slack_oauth_callback"))
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            token_response = await client.post(
+                "https://slack.com/api/oauth.v2.access",
+                data={
+                    "client_id": SLACK_CLIENT_ID,
+                    "client_secret": SLACK_CLIENT_SECRET,
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                },
+            )
+    except Exception as exc:
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": f"slack_token_request_failed:{exc}",
+                }
+            )
+        )
+
+    try:
+        slack_data = token_response.json()
+    except ValueError:
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": "invalid_slack_token_response",
+                }
+            )
+        )
+
+    if not slack_data.get("ok"):
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": str(slack_data.get("error", "oauth_failed")),
+                }
+            )
+        )
+
+    bot_token = str(slack_data.get("access_token") or "").strip()
+    authed_user_id = str((slack_data.get("authed_user") or {}).get("id") or "").strip()
+
+    if not bot_token or not authed_user_id:
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": "missing_bot_token_or_user_id",
+                }
+            )
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            user_response = await client.get(
+                "https://slack.com/api/users.info",
+                params={"user": authed_user_id},
+                headers={"Authorization": f"Bearer {bot_token}"},
+            )
+            user_data = user_response.json()
+    except Exception as exc:
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": f"slack_user_lookup_failed:{exc}",
+                }
+            )
+        )
+
+    if not user_data.get("ok"):
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": str(user_data.get("error", "users_info_failed")),
+                }
+            )
+        )
+
+    slack_user = user_data.get("user") or {}
+    profile = slack_user.get("profile") or {}
+    doctor_email = str(profile.get("email") or "").strip().lower()
+    doctor_name = str(slack_user.get("real_name") or profile.get("real_name") or "").strip()
+
+    if not doctor_email:
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": "slack_email_not_available",
+                }
+            )
+        )
+
+    sync_result = await get_or_create_doctor_by_email(
+        doctor_email=doctor_email,
+        doctor_name=doctor_name or doctor_email.split("@")[0],
+    )
+    if not sync_result.get("ok"):
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": "doctor_profile_sync_failed",
+                }
+            )
+        )
+
+    update_result = await update_doctor_slack_credentials_by_email(
+        doctor_email=doctor_email,
+        slack_bot_token=bot_token,
+        slack_user_id=authed_user_id,
+    )
+    if not update_result.get("ok"):
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": "slack_credentials_save_failed",
+                }
+            )
+        )
+
+    return RedirectResponse(url=_build_frontend_redirect({"slack_connected": "true"}))
 
 
 def _get_openai_client() -> AsyncOpenAI:
@@ -342,7 +540,8 @@ async def doctor_report_notify_endpoint(payload: DoctorReportRequest) -> DoctorR
     target_date = payload.date or datetime.now().strftime("%Y-%m-%d")
 
     prompt = (
-        f"Generate my daily report for {target_date} and notify me on Slack. "
+        f"Generate my daily report for {target_date} and send it to my email. "
+        "Also send it to Slack if my Slack account is connected. "
         f"I am {payload.doctor_name} and my email is {payload.doctor_email}."
     )
 
@@ -365,8 +564,12 @@ async def doctor_report_notify_endpoint(payload: DoctorReportRequest) -> DoctorR
     if report_outcome is not None:
         parsed_report = report_outcome.get("result")
         if isinstance(parsed_report, dict):
+            delivery_value = parsed_report.get("delivery")
             notification_value = parsed_report.get("notification", {})
-            if isinstance(notification_value, dict):
+
+            if isinstance(delivery_value, dict):
+                notification = delivery_value
+            elif isinstance(notification_value, dict):
                 notification = notification_value
             else:
                 notification = {"raw": notification_value}
@@ -377,7 +580,11 @@ async def doctor_report_notify_endpoint(payload: DoctorReportRequest) -> DoctorR
                 or parsed_report.get("message")
                 or response_text
             )
-            sent = bool(notification.get("ok")) or bool(parsed_report.get("ok", False))
+            delivery_status = str(parsed_report.get("delivery_status") or "")
+            if delivery_status:
+                sent = delivery_status in {"all_success", "partial_success"}
+            else:
+                sent = bool(notification.get("ok")) or bool(parsed_report.get("ok", False))
 
     return DoctorReportResponse(
         report=report,

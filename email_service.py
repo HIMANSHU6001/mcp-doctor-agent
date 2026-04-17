@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from typing import Any, Dict
 
 import resend
 
@@ -107,6 +108,49 @@ async def send_doctor_appointment_notification(
       <p><strong>Patient email:</strong> {patient_email}</p>
       <p><strong>Date and time:</strong> {formatted_time}</p>
       <p><strong>Symptoms:</strong> {safe_symptoms}</p>
+      <p>Regards,<br/>Doctor Assistant Team</p>
+    </div>
+    """
+
+    payload = {
+        "from": RESEND_FROM_EMAIL or "onboarding@resend.dev",
+        "to": [doctor_email],
+        "subject": subject,
+        "html": html,
+    }
+
+    try:
+        return await asyncio.to_thread(resend.Emails.send, payload)
+    except Exception as exc:
+        actionable_message = _build_resend_error_message(exc)
+        raise RuntimeError(f"{actionable_message} Provider details: {exc}") from exc
+
+
+async def send_doctor_daily_report_email(
+    doctor_email: str,
+    doctor_name: str,
+    date: str,
+    report_text: str,
+    stats: Dict[str, Any] | None = None,
+):
+    """Send the doctor's daily report summary over email."""
+    if not RESEND_API_KEY:
+        raise RuntimeError("RESEND_API_KEY is missing. Set it in the .env file.")
+
+    appointment_count = int((stats or {}).get("appointment_count", 0))
+    fever_mentions = int((stats or {}).get("fever_mentions", 0))
+
+    subject = f"Daily Report for {date}"
+    html = f"""
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #1f2937;">
+      <h2 style="color: #0f766e;">Daily Doctor Report</h2>
+      <p>Hi {doctor_name},</p>
+      <p>Here is your report for <strong>{date}</strong>.</p>
+      <ul>
+        <li><strong>Appointments:</strong> {appointment_count}</li>
+        <li><strong>Fever mentions:</strong> {fever_mentions}</li>
+      </ul>
+      <p><strong>Summary:</strong> {report_text}</p>
       <p>Regards,<br/>Doctor Assistant Team</p>
     </div>
     """
