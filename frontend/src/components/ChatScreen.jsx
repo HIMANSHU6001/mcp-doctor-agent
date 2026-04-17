@@ -72,18 +72,18 @@ const ChatScreen = () => {
     if (user?.slackConnected) {
       return
     }
-
+    
     if (!SLACK_CLIENT_ID) {
       toast.error('Slack is not configured. Set VITE_SLACK_CLIENT_ID in frontend environment.')
       return
     }
-
+    
     const redirectUri = `${API_BASE}/api/auth/slack/callback`
     const slackAuthUrl = new URL('https://slack.com/oauth/v2/authorize')
     slackAuthUrl.searchParams.set('client_id', SLACK_CLIENT_ID)
-    slackAuthUrl.searchParams.set('scope', 'chat:write,users:read.email')
+    slackAuthUrl.searchParams.set('scope', 'chat:write,users:read.email,users:read')
     slackAuthUrl.searchParams.set('redirect_uri', redirectUri)
-
+    
     window.location.assign(slackAuthUrl.toString())
   }
 
