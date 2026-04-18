@@ -78,11 +78,17 @@ const ChatScreen = () => {
       return
     }
     
+    if (!user?.email) {
+      toast.error('User email not available. Please log in again.')
+      return
+    }
+    
     const redirectUri = `${API_BASE}/api/auth/slack/callback`
     const slackAuthUrl = new URL('https://slack.com/oauth/v2/authorize')
     slackAuthUrl.searchParams.set('client_id', SLACK_CLIENT_ID)
     slackAuthUrl.searchParams.set('scope', 'chat:write,users:read.email,users:read')
     slackAuthUrl.searchParams.set('redirect_uri', redirectUri)
+    slackAuthUrl.searchParams.set('state', user.email)
     
     window.location.assign(slackAuthUrl.toString())
   }

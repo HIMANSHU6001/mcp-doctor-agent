@@ -213,6 +213,7 @@ async def google_auth_endpoint(payload: GoogleAuthRequest) -> GoogleAuthResponse
 async def slack_oauth_callback(
     request: Request,
     code: str | None = None,
+    state: str | None = None,
     error: str | None = None,
 ) -> RedirectResponse:
     if error:
@@ -231,6 +232,16 @@ async def slack_oauth_callback(
                 {
                     "slack_connected": "false",
                     "slack_error": "missing_code",
+                }
+            )
+        )
+
+    if not state or not state.strip():
+        return RedirectResponse(
+            url=_build_frontend_redirect(
+                {
+                    "slack_connected": "false",
+                    "slack_error": "missing_state",
                 }
             )
         )
@@ -333,18 +344,8 @@ async def slack_oauth_callback(
 
     slack_user = user_data.get("user") or {}
     profile = slack_user.get("profile") or {}
-    doctor_email = str(profile.get("email") or "").strip().lower()
+    doctor_email = str(state).strip().lower()  # Use state (current user's email) as the authoritative email
     doctor_name = str(slack_user.get("real_name") or profile.get("real_name") or "").strip()
-
-    if not doctor_email:
-        return RedirectResponse(
-            url=_build_frontend_redirect(
-                {
-                    "slack_connected": "false",
-                    "slack_error": "slack_email_not_available",
-                }
-            )
-        )
 
     sync_result = await get_or_create_doctor_by_email(
         doctor_email=doctor_email,
