@@ -4,7 +4,6 @@ import {
   Bot,
   Calendar,
   Check,
-  HeartPulse,
   Link2,
   Loader2,
   LogOut,
@@ -27,12 +26,7 @@ const SLACK_CLIENT_ID = import.meta.env.VITE_SLACK_CLIENT_ID || ''
 
 const PATIENT_SUGGESTIONS = [
   { icon: Calendar, label: 'Book an appointment', prompt: 'I would like to book an appointment.' },
-  { icon: Users, label: 'List available doctors', prompt: 'Please list available doctors.' },
-]
-
-const DOCTOR_SUGGESTIONS = [
-  { icon: Calendar, label: 'My schedule', prompt: 'Show my schedule for today.' },
-  { icon: Activity, label: 'Daily stats', prompt: 'Generate my daily stats report for today.' },
+  { icon: Users, label: 'List all doctors', prompt: 'Please list all available doctors.' },
 ]
 
 const ChatScreen = () => {
@@ -44,6 +38,7 @@ const ChatScreen = () => {
     reportStatus,
     clearReportStatus,
     sendMessage,
+    sendDoctorReportNotification,
     setSlackConnected,
     logout,
   } = useApp()
@@ -52,7 +47,6 @@ const ChatScreen = () => {
   const textareaRef = useRef(null)
 
   const slackConnected = Boolean(user?.slackConnected)
-  const suggestions = role === 'doctor' ? DOCTOR_SUGGESTIONS : PATIENT_SUGGESTIONS
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -108,6 +102,10 @@ const ChatScreen = () => {
       event.preventDefault()
       submit(input)
     }
+  }
+
+  const handleDailyStats = async () => {
+    await sendDoctorReportNotification()
   }
 
   const handleConnectSlack = () => {
@@ -191,20 +189,35 @@ const ChatScreen = () => {
               <h2 className="text-xl font-semibold text-slate-900">
                 Hi {user?.name?.split(' ')[0] || 'there'}, how can I help you today?
               </h2>
-              <p className="text-sm text-slate-500">Pick a suggestion or type your own question.</p>
+              <p className="text-sm text-slate-500">Type your question to get started.</p>
             </div>
-            <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-3">
-              {suggestions.map((suggestion) => (
+            {role === 'patient' && (
+              <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                {PATIENT_SUGGESTIONS.map((suggestion) => (
+                  <button
+                    key={suggestion.label}
+                    onClick={() => submit(suggestion.prompt)}
+                    className="group flex flex-col items-start gap-2 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-sky-300 hover:bg-sky-50/60 hover:shadow-sm"
+                  >
+                    <suggestion.icon className="h-5 w-5 text-sky-600" />
+                    <span className="text-sm font-medium text-slate-900">{suggestion.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {role === 'doctor' && (
+              <div className="mt-4 flex justify-center">
                 <button
-                  key={suggestion.label}
-                  onClick={() => submit(suggestion.prompt)}
-                  className="group flex flex-col items-start gap-2 rounded-xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-sky-300 hover:bg-sky-50/60 hover:shadow-sm"
+                  type="button"
+                  onClick={handleDailyStats}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-900 hover:border-sky-300 hover:bg-sky-50/60"
                 >
-                  <suggestion.icon className="h-5 w-5 text-sky-600" />
-                  <span className="text-sm font-medium text-slate-900">{suggestion.label}</span>
+                  <Activity className="h-4 w-4 text-sky-600" />
+                  Send Daily Report
                 </button>
-              ))}
-            </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="mx-auto max-w-3xl space-y-4">
@@ -267,19 +280,16 @@ const ChatScreen = () => {
       {role === 'doctor' && messages.length > 0 && (
         <div className="border-t border-slate-200 bg-white/60 px-4 py-2 sm:px-6">
           <div className="mx-auto flex max-w-3xl gap-2 overflow-x-auto pb-1 [scrollbar-width:thin]">
-            {DOCTOR_SUGGESTIONS.map((suggestion) => (
-              <Button
-                key={suggestion.label}
-                variant="outline"
-                size="sm"
-                onClick={() => submit(suggestion.prompt)}
-                disabled={isLoading}
-                className="shrink-0 gap-2"
-              >
-                <suggestion.icon className="h-4 w-4" />
-                {suggestion.label}
-              </Button>
-            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDailyStats}
+              disabled={isLoading}
+              className="shrink-0 gap-2"
+            >
+              <Activity className="h-4 w-4" />
+              Send Daily Report
+            </Button>
           </div>
           {reportStatus && (
             <div className="mx-auto mt-1 max-w-3xl">
